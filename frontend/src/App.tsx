@@ -6,34 +6,20 @@ import { VaultCompact } from './components/VaultCompact';
 import { TierStepper } from './components/TierStepper';
 import { VaultListPage } from './components/VaultListPage';
 import { useSentinel } from './hooks/useSentinel';
-import { fetchVaultSummary } from './utils/vaultFetch';
+import { fetchVaultIdsForOwner } from './utils/vaultFetch';
 
 export function App() {
     const { network, walletAddress, connectToWallet, connecting } = useWalletConnect();
 
     // ── Vault list state ────────────────────────────────────────────────────────
-    // Always derived from connected wallet only — no localStorage persistence needed
-    const trackedVaults = walletAddress ? [walletAddress] : [];
-    const [selectedOwner, setSelectedOwner] = useState<string | null>(null);
-
-    // Whether the connected wallet already has a vault (for the list page CTA)
-    const [walletHasVault, setWalletHasVault] = useState<boolean | null>(null);
-
-    // Clear any stale localStorage entries from previous sessions
-    useEffect(() => { localStorage.removeItem('es_tracked_vaults'); }, []);
-
-    // Check if connected wallet has a vault
-    useEffect(() => {
-        if (!walletAddress || !network) return;
-        void fetchVaultSummary(walletAddress, network).then(s => {
-            // Only update if the call succeeded — errors leave state as null (unknown)
-            if (!s.error) setWalletHasVault(s.hasVault);
-        });
-    }, [walletAddress, network]);
+    const [vaultIds, setVaultIds] = useState<bigint[]>([]);
+    const [vaultIdsLoaded, setVaultIdsLoaded] = useState(false);
+    const [selectedVaultId, setSelectedVaultId] = useState<bigint | null>(null);
 
     // ── Vault creation state ────────────────────────────────────────────────────
     const [beneficiaryInput, setBeneficiaryInput] = useState('');
     const [vaultTxSubmitted, setVaultTxSubmitted] = useState(false);
+    const [pendingVaultId, setPendingVaultId] = useState<bigint | null>(null);
     const [creatingVault, setCreatingVault] = useState(false);
     const [showCreateForm, setShowCreateForm] = useState(false);
 
@@ -45,7 +31,7 @@ export function App() {
     const [checkInSubmitting, setCheckInSubmitting] = useState(false);
     const [checkInSubmitted, setCheckInSubmitted] = useState(false);
 
-    // ── useSentinel — scoped to selected owner ──────────────────────────────────
+    // ── useSentinel — scoped to selected vault ID ───────────────────────────────
     const {
         status,
         loading,
@@ -58,47 +44,74 @@ export function App() {
         createVault,
         checkIn,
         deposit,
-    } = useSentinel(selectedOwner);
+    } = useSentinel(selectedVaultId);
 
-    // When vault is confirmed after creation, update walletHasVault flag
+    // Fetch vault IDs when wallet connects
     useEffect(() => {
-        if (status && walletAddress && selectedOwner === walletAddress) {
-            setWalletHasVault(true);
+        if (!walletAddress || !network) {
+            setVaultIds([]);
+            setVaultIdsLoaded(false);
+            return;
         }
-    }, [status, walletAddress, selectedOwner]);
+        setVaultIdsLoaded(false);
+        void fetchVaultIdsForOwner(walletAddress, network).then(ids => {
+            setVaultIds(ids);
+            setVaultIdsLoaded(true);
+        }).catch(() => {
+            setVaultIds([]);
+            setVaultIdsLoaded(true);
+        });
+    }, [walletAddress, network]);
 
     // Poll for vault confirmation after tx is submitted
     useEffect(() => {
-        if (!vaultTxSubmitted || !walletAddress || !network) return;
+        if (!vaultTxSubmitted || !walletAddress || !network || pendingVaultId == null) return;
         let cancelled = false;
         const poll = setInterval(() => {
-            void fetchVaultSummary(walletAddress, network).then(s => {
+            void fetchVaultIdsForOwner(walletAddress, network).then(ids => {
                 if (cancelled) return;
-                if (s.hasVault) {
+                if (ids.includes(pendingVaultId)) {
                     clearInterval(poll);
                     setVaultTxSubmitted(false);
-                    setWalletHasVault(true);
-                    handleSelectVault(walletAddress);
+                    setVaultIds(ids);
+                    setSelectedVaultId(pendingVaultId);
+                    setPendingVaultId(null);
                 }
             });
         }, 8_000);
         return () => { cancelled = true; clearInterval(poll); };
-    }, [vaultTxSubmitted, walletAddress, network]);
+    }, [vaultTxSubmitted, walletAddress, network, pendingVaultId]);
 
     // ── Vault list handlers ─────────────────────────────────────────────────────
-    const handleSelectVault = (addr: string) => {
-        setSelectedOwner(addr);
+    const handleSelectVault = (id: bigint) => {
+        setSelectedVaultId(id);
         setShowCreateForm(false);
         setVaultTxSubmitted(false);
     };
 
     const handleBack = () => {
-        setSelectedOwner(null);
+        setSelectedVaultId(null);
         setShowCreateForm(false);
         setVaultTxSubmitted(false);
-        // Refresh walletHasVault in case a vault was just created
+        setCreatingVault(false);
+        // Refresh vault IDs
         if (walletAddress && network) {
-            void fetchVaultSummary(walletAddress, network).then(s => { if (!s.error) setWalletHasVault(s.hasVault); });
+            void fetchVaultIdsForOwner(walletAddress, network).then(ids => setVaultIds(ids));
+        }
+    };
+
+    const handleCreateVault = async () => {
+        setCreatingVault(true);
+        try {
+            const newId = await createVault(beneficiaryInput.trim());
+            setCreatingVault(false);
+            if (newId !== null) {
+                setPendingVaultId(newId);
+                setVaultTxSubmitted(true);
+                setShowCreateForm(false);
+            }
+        } catch {
+            setCreatingVault(false);
         }
     };
 
@@ -143,9 +156,28 @@ export function App() {
 
     // ── No vault selected — show list / create page ─────────────────────────────
 
-    if (!selectedOwner) {
-        // If wallet has no vault, go straight to create form (skip the vault list)
-        if (walletHasVault === false && !vaultTxSubmitted) {
+    if (selectedVaultId === null) {
+        // Tx submitted — waiting for confirmation (always takes priority)
+        if (vaultTxSubmitted) {
+            return (
+                <>
+                    <Header />
+                    <div className="empty-state">
+                        <svg className="empty-state__icon" viewBox="0 0 64 64" fill="none" style={{ opacity: 0.5 }}>
+                            <circle cx="32" cy="32" r="28" stroke="#555970" strokeWidth="1.5" />
+                            <circle cx="32" cy="32" r="20" stroke="#555970" strokeWidth="1" strokeDasharray="4 4" />
+                            <circle cx="32" cy="32" r="4" fill="#555970" />
+                        </svg>
+                        <h2 className="empty-state__title">Transaction Submitted</h2>
+                        <p className="empty-state__desc">Vault creation transaction sent. Waiting for on-chain confirmation…</p>
+                        <span className="btn-trigger__spinner" style={{ width: 24, height: 24, marginTop: '1rem' }} />
+                    </div>
+                </>
+            );
+        }
+
+        // If wallet has no vaults and IDs are loaded, go straight to create form
+        if (vaultIdsLoaded && vaultIds.length === 0 && !showCreateForm) {
             const canCreate = beneficiaryInput.trim().length > 10;
             return (
                 <>
@@ -169,39 +201,12 @@ export function App() {
                             />
                             <button
                                 className="btn-connect"
-                                onClick={() => {
-                                    setCreatingVault(true);
-                                    void createVault(beneficiaryInput.trim())
-                                        .then(ok => {
-                                            setCreatingVault(false);
-                                            if (ok) setVaultTxSubmitted(true);
-                                        })
-                                        .catch(() => setCreatingVault(false));
-                                }}
+                                onClick={() => void handleCreateVault()}
                                 disabled={!canCreate || creatingVault}
                             >
                                 {creatingVault ? 'Waiting for signature...' : 'Create Vault'}
                             </button>
                         </div>
-                    </div>
-                </>
-            );
-        }
-
-        // Tx submitted — waiting for confirmation
-        if (vaultTxSubmitted) {
-            return (
-                <>
-                    <Header />
-                    <div className="empty-state">
-                        <svg className="empty-state__icon" viewBox="0 0 64 64" fill="none" style={{ opacity: 0.5 }}>
-                            <circle cx="32" cy="32" r="28" stroke="#555970" strokeWidth="1.5" />
-                            <circle cx="32" cy="32" r="20" stroke="#555970" strokeWidth="1" strokeDasharray="4 4" />
-                            <circle cx="32" cy="32" r="4" fill="#555970" />
-                        </svg>
-                        <h2 className="empty-state__title">Transaction Submitted</h2>
-                        <p className="empty-state__desc">Vault creation transaction sent. Waiting for on-chain confirmation…</p>
-                        <span className="btn-trigger__spinner" style={{ width: 24, height: 24, marginTop: '1rem' }} />
                     </div>
                 </>
             );
@@ -236,18 +241,7 @@ export function App() {
                                 </button>
                                 <button
                                     className="btn-connect"
-                                    onClick={() => {
-                                        setCreatingVault(true);
-                                        void createVault(beneficiaryInput.trim())
-                                            .then(ok => {
-                                                setCreatingVault(false);
-                                                if (ok) {
-                                                    setShowCreateForm(false);
-                                                    setVaultTxSubmitted(true);
-                                                }
-                                            })
-                                            .catch(() => setCreatingVault(false));
-                                    }}
+                                    onClick={() => void handleCreateVault()}
                                     disabled={!canCreate || creatingVault}
                                 >
                                     {creatingVault ? 'Waiting for signature...' : 'Create Vault'}
@@ -265,10 +259,9 @@ export function App() {
                 <VaultListPage
                     network={network!}
                     walletAddress={walletAddress!}
-                    trackedVaults={trackedVaults}
+                    vaultIds={vaultIds}
                     onSelectVault={handleSelectVault}
                     onCreateVault={() => setShowCreateForm(true)}
-                    connectedWalletHasVault={walletHasVault}
                 />
             </>
         );
@@ -303,7 +296,7 @@ export function App() {
                         <circle cx="32" cy="32" r="4" fill="#555970" />
                     </svg>
                     <h2 className="empty-state__title">No Vault Found</h2>
-                    <p className="empty-state__desc">No vault exists for this address.</p>
+                    <p className="empty-state__desc">No vault exists for this ID.</p>
                     <button className="btn-connect" style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', color: 'var(--text-secondary)', marginTop: '0' }} onClick={handleBack}>
                         ← Back to Vaults
                     </button>
@@ -324,15 +317,10 @@ export function App() {
                     ← All Vaults
                 </button>
 
-                {/* Viewing notice — show when looking at another address's vault */}
-                {selectedOwner !== walletAddress && (
-                    <div className="readonly-notice">
-                        <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
-                            <path d="M1.75 2h12.5c.966 0 1.75.784 1.75 1.75v8.5A1.75 1.75 0 0114.25 14H1.75A1.75 1.75 0 010 12.25v-8.5C0 2.784.784 2 1.75 2zM1.5 12.251c0 .138.112.25.25.25h12.5a.25.25 0 00.25-.25V5.809L8.38 9.397a.75.75 0 01-.76 0L1.5 5.809v6.442zm13-8.181L8 7.88 1.5 4.07V3.75a.25.25 0 01.25-.25h12.5a.25.25 0 01.25.25v.32z" />
-                        </svg>
-                        Viewing vault for: {selectedOwner.slice(0, 10)}…{selectedOwner.slice(-8)}
-                    </div>
-                )}
+                {/* Vault ID header */}
+                <div style={{ marginBottom: '0.5rem', color: 'var(--text-dim)', fontSize: '0.85rem' }}>
+                    Vault #{selectedVaultId.toString()}
+                </div>
 
                 {error && (
                     <div className="alert alert--error">
@@ -343,7 +331,7 @@ export function App() {
                     </div>
                 )}
 
-                {!isOwner && selectedOwner === walletAddress && !isFinalized && (
+                {!isOwner && !isFinalized && (
                     <div className="readonly-notice">
                         <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
                             <path d="M4 4v2h-.25A1.75 1.75 0 002 7.75v5.5c0 .966.784 1.75 1.75 1.75h8.5A1.75 1.75 0 0014 13.25v-5.5A1.75 1.75 0 0012.25 6H12V4a4 4 0 00-8 0zm6 2V4a2 2 0 00-4 0v2h4z" />
@@ -361,8 +349,8 @@ export function App() {
                         <TierStepper
                             status={s}
                             loading={loading}
-                            onTriggerTier1={() => triggerTier1(selectedOwner ?? undefined)}
-                            onTriggerTier2={() => triggerTier2(selectedOwner ?? undefined)}
+                            onTriggerTier1={() => triggerTier1()}
+                            onTriggerTier2={() => triggerTier2()}
                         />
                     </div>
                 </div>

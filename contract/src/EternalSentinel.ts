@@ -11,7 +11,9 @@ import {
     SafeMath,
     EMPTY_POINTER,
 } from '@btc-vision/btc-runtime/runtime';
+import { StoredMapU256 } from '@btc-vision/btc-runtime/runtime/storage/maps/StoredMapU256';
 import { AddressMemoryMap } from '@btc-vision/btc-runtime/runtime/memory/AddressMemoryMap';
+import { MapOfMap } from '@btc-vision/btc-runtime/runtime/memory/MapOfMap';
 
 // ── Block-time constants ────────────────────────────────────────────────────
 // ~26,280 blocks ≈ 6 months at 1 block/10 min
@@ -35,13 +37,15 @@ const DEFAULT_FEE: u256 = u256.fromU64(10_000);
 /**
  * EternalSentinel — Multi-Vault Dead-Man's Switch with Progressive Inheritance.
  *
- * Any address can create its own isolated vault.
- * Ownership is derived from Blockchain.tx.sender — no address spoofing possible.
+ * Any address can create multiple isolated vaults, each identified by an
+ * auto-incrementing vaultId (u256). Ownership is derived from
+ * Blockchain.tx.sender — no address spoofing possible.
  *
  * Architecture
  * ────────────
- *  • Each vault is identified by the owner's address (stored as key in all per-vault maps).
- *  • Six AddressMemoryMap instances store per-vault state.
+ *  • Each vault is identified by a unique vaultId (global auto-increment).
+ *  • StoredMapU256 instances store per-vault state keyed by vaultId.
+ *  • MapOfMap + AddressMemoryMap track owner -> vault index mapping.
  *  • A global feeAmount (StoredU256) and feeRecipient (StoredAddress) track platform fees.
  *
  * Inheritance Timeline
@@ -53,43 +57,47 @@ const DEFAULT_FEE: u256 = u256.fromU64(10_000);
 export class EternalSentinel extends OP_NET {
 
     // ── Pointers (each Blockchain.nextPointer call allocates a unique slot) ───
-    private readonly _statusPointer: u16 = Blockchain.nextPointer;
-    private readonly _heartbeatPointer: u16 = Blockchain.nextPointer;
-    private readonly _depositedPointer: u16 = Blockchain.nextPointer;
-    private readonly _tier1AmtPointer: u16 = Blockchain.nextPointer;
-    private readonly _tier2AmtPointer: u16 = Blockchain.nextPointer;
-    private readonly _beneficiaryPointer: u16 = Blockchain.nextPointer;
+    private readonly _nextVaultIdPointer: u16 = Blockchain.nextPointer;
+    private readonly _vaultOwnerPointer: u16 = Blockchain.nextPointer;
+    private readonly _vaultBeneficiaryPointer: u16 = Blockchain.nextPointer;
+    private readonly _vaultStatusPointer: u16 = Blockchain.nextPointer;
+    private readonly _vaultHeartbeatPointer: u16 = Blockchain.nextPointer;
+    private readonly _vaultDepositedPointer: u16 = Blockchain.nextPointer;
+    private readonly _vaultTier1AmtPointer: u16 = Blockchain.nextPointer;
+    private readonly _vaultTier2AmtPointer: u16 = Blockchain.nextPointer;
+    private readonly _ownerVaultsPointer: u16 = Blockchain.nextPointer;
+    private readonly _ownerVaultCountPointer: u16 = Blockchain.nextPointer;
     private readonly _feeAmountPointer: u16 = Blockchain.nextPointer;
     private readonly _feeRecipientPointer: u16 = Blockchain.nextPointer;
     private readonly _totalVaultsPointer: u16 = Blockchain.nextPointer;
 
-    // ── Per-vault maps (key = vault owner's Address) ──────────────────────────
+    // ── Per-vault maps (key = vaultId as u256) ──────────────────────────────────
+    /** Vault owner address stored as u256 */
+    private readonly vaultOwner: StoredMapU256 = new StoredMapU256(this._vaultOwnerPointer);
+    /** Vault beneficiary address stored as u256 */
+    private readonly vaultBeneficiary: StoredMapU256 = new StoredMapU256(this._vaultBeneficiaryPointer);
     /** Vault lifecycle status: 0=none, 1=active, 2=tier1_released, 3=finalized */
-    private readonly vaultStatus: AddressMemoryMap = new AddressMemoryMap(this._statusPointer);
+    private readonly vaultStatus: StoredMapU256 = new StoredMapU256(this._vaultStatusPointer);
     /** Block number of last check-in (or vault creation), stored as u256 */
-    private readonly vaultHeartbeat: AddressMemoryMap = new AddressMemoryMap(this._heartbeatPointer);
+    private readonly vaultHeartbeat: StoredMapU256 = new StoredMapU256(this._vaultHeartbeatPointer);
     /** Cumulative BTC deposited (satoshis) */
-    private readonly vaultDeposited: AddressMemoryMap = new AddressMemoryMap(this._depositedPointer);
+    private readonly vaultDeposited: StoredMapU256 = new StoredMapU256(this._vaultDepositedPointer);
     /** 10% tier-1 entitlement */
-    private readonly vaultTier1Amt: AddressMemoryMap = new AddressMemoryMap(this._tier1AmtPointer);
+    private readonly vaultTier1Amt: StoredMapU256 = new StoredMapU256(this._vaultTier1AmtPointer);
     /** 90% tier-2 entitlement */
-    private readonly vaultTier2Amt: AddressMemoryMap = new AddressMemoryMap(this._tier2AmtPointer);
-    /**
-     * Beneficiary address stored as raw bytes (Address extends Uint8Array).
-     * Use setAsUint8Array / getAsUint8Array for storing 32-byte addresses.
-     */
-    private readonly vaultBeneficiary: AddressMemoryMap = new AddressMemoryMap(this._beneficiaryPointer);
+    private readonly vaultTier2Amt: StoredMapU256 = new StoredMapU256(this._vaultTier2AmtPointer);
+
+    // ── Owner -> vault index mapping ────────────────────────────────────────────
+    /** owner -> (index_bytes -> vaultId) */
+    private readonly ownerVaults: MapOfMap<u256> = new MapOfMap<u256>(this._ownerVaultsPointer);
+    /** owner -> vault count */
+    private readonly ownerVaultCount: AddressMemoryMap = new AddressMemoryMap(this._ownerVaultCountPointer);
 
     // ── Global platform state ─────────────────────────────────────────────────
+    private readonly nextVaultId: StoredU256 = new StoredU256(this._nextVaultIdPointer, EMPTY_POINTER);
     private readonly feeAmount: StoredU256 = new StoredU256(this._feeAmountPointer, EMPTY_POINTER);
     private readonly feeRecipient: StoredAddress = new StoredAddress(this._feeRecipientPointer);
     private readonly totalVaults: StoredU256 = new StoredU256(this._totalVaultsPointer, EMPTY_POINTER);
-
-    // ── Selectors are generated automatically by @method decorators + opnet-transform ──
-    // Do NOT define manual encodeSelector fields here — the transform generates the
-    // execute() dispatcher using the decorated method names (with underscore prefix).
-    // Manual selectors computed without the underscore would produce different 4-byte
-    // hashes and would be overwritten at build time anyway.
 
     public constructor() {
         super();
@@ -97,40 +105,34 @@ export class EternalSentinel extends OP_NET {
 
     // ── Deployment ────────────────────────────────────────────────────────────
     public override onDeployment(_calldata: Calldata): void {
+        this.nextVaultId.set(u256.One); // vault IDs start at 1
         this.feeAmount.set(DEFAULT_FEE);
         this.feeRecipient.value = Blockchain.tx.sender;
         this.totalVaults.set(u256.Zero);
     }
 
-    // ── Router ────────────────────────────────────────────────────────────────
-    // The execute() dispatcher is auto-generated by opnet-transform at build time
-    // from the @method decorators on each private method. Do NOT write it manually
-    // here — the transform overwrites any manually written execute() and uses the
-    // decorated method names (with the underscore prefix) to compute selectors.
-    // This ensures the on-chain selector hash always matches the ABI JSON and
-    // the frontend ABI which also use the underscore-prefixed names.
-
     // ── Helpers ───────────────────────────────────────────────────────────────
 
-    /** Read vault status for a given owner */
-    private statusOf(owner: Address): u256 {
-        return this.vaultStatus.get(owner);
+    /** Convert Address (Uint8Array) to u256 for storage */
+    private addressToU256(addr: Address): u256 {
+        return u256.fromUint8ArrayBE(addr);
     }
 
-    /** Read heartbeat block for a given owner */
-    private heartbeatOf(owner: Address): u64 {
-        // block numbers fit in u64; stored as u256, read via .lo1
-        return this.vaultHeartbeat.get(owner).lo1;
-    }
-
-    /** Ensure caller (Blockchain.tx.sender) has an active vault, return the sender */
-    private requireActiveVault(): Address {
-        const sender: Address = Blockchain.tx.sender;
-        const st: u256 = this.statusOf(sender);
-        if (st != STATUS_ACTIVE) {
-            throw new Revert('No active vault for sender');
+    /** Verify that tx.sender is the owner of the given vault */
+    private requireVaultOwner(vaultId: u256): void {
+        const storedOwner: u256 = this.vaultOwner.get(vaultId);
+        const sender: u256 = this.addressToU256(Blockchain.tx.sender);
+        if (storedOwner != sender) {
+            throw new Revert('Not the vault owner');
         }
-        return sender;
+    }
+
+    /** Verify vault is in an expected status */
+    private requireVaultStatus(vaultId: u256, expected: u256): void {
+        const st: u256 = this.vaultStatus.get(vaultId);
+        if (st != expected) {
+            throw new Revert('Unexpected vault status');
+        }
     }
 
     /** Blocks elapsed since last heartbeat, clamped to 0 if clock is weird */
@@ -140,23 +142,19 @@ export class EternalSentinel extends OP_NET {
     }
 
     /** Recalculate tier split from a new total deposited amount */
-    private recalcTiers(owner: Address, newTotal: u256): void {
+    private recalcTiers(vaultId: u256, newTotal: u256): void {
         const t1: u256 = SafeMath.div(SafeMath.mul(newTotal, TIER_1_BPS), BPS_DENOMINATOR);
         const t2: u256 = SafeMath.sub(newTotal, t1);
-        this.vaultTier1Amt.set(owner, t1);
-        this.vaultTier2Amt.set(owner, t2);
+        this.vaultTier1Amt.set(vaultId, t1);
+        this.vaultTier2Amt.set(vaultId, t2);
     }
 
     // ── Create Vault ──────────────────────────────────────────────────────────
     @method({ name: 'beneficiary', type: ABIDataTypes.ADDRESS })
-    @returns({ name: 'success', type: ABIDataTypes.BOOL })
+    @returns({ name: 'vaultId', type: ABIDataTypes.UINT256 })
     private _createVault(calldata: Calldata): BytesWriter {
         const owner: Address = Blockchain.tx.sender;
-
-        // Each address may hold only one vault
-        if (this.statusOf(owner) != STATUS_UNINITIALIZED) {
-            throw new Revert('Vault already exists for this address');
-        }
+        const ownerU256: u256 = this.addressToU256(owner);
 
         const beneficiary: Address = calldata.readAddress();
         if (beneficiary.isZero()) {
@@ -166,30 +164,41 @@ export class EternalSentinel extends OP_NET {
             throw new Revert('Beneficiary must differ from owner');
         }
 
-        // Initialise vault state
-        this.vaultStatus.set(owner, STATUS_ACTIVE);
-        this.vaultHeartbeat.set(owner, u256.fromU64(Blockchain.block.number));
-        this.vaultDeposited.set(owner, u256.Zero);
-        this.vaultTier1Amt.set(owner, u256.Zero);
-        this.vaultTier2Amt.set(owner, u256.Zero);
-        // Store beneficiary address as raw 32-byte value
-        this.vaultBeneficiary.setAsUint8Array(owner, beneficiary);
+        // Allocate vault ID
+        const vaultId: u256 = this.nextVaultId.value;
+        this.nextVaultId.set(SafeMath.add(vaultId, u256.One));
 
-        // Increment vault counter
+        // Store vault data
+        this.vaultOwner.set(vaultId, ownerU256);
+        this.vaultBeneficiary.set(vaultId, this.addressToU256(beneficiary));
+        this.vaultStatus.set(vaultId, STATUS_ACTIVE);
+        this.vaultHeartbeat.set(vaultId, u256.fromU64(Blockchain.block.number));
+        this.vaultDeposited.set(vaultId, u256.Zero);
+        this.vaultTier1Amt.set(vaultId, u256.Zero);
+        this.vaultTier2Amt.set(vaultId, u256.Zero);
+
+        // Index: ownerVaults[owner][count] = vaultId
+        const count: u256 = this.ownerVaultCount.get(owner);
+        this.ownerVaults.get(owner).set(count.toUint8Array(true), vaultId);
+        this.ownerVaultCount.set(owner, SafeMath.add(count, u256.One));
+
+        // Increment global vault counter
         this.totalVaults.set(SafeMath.add(this.totalVaults.value, u256.One));
 
-        const writer: BytesWriter = new BytesWriter(1);
-        writer.writeBoolean(true);
+        const writer: BytesWriter = new BytesWriter(32);
+        writer.writeU256(vaultId);
         return writer;
     }
 
     // ── Check-In (Heartbeat Reset) ────────────────────────────────────────────
-    @method()
+    @method({ name: 'vaultId', type: ABIDataTypes.UINT256 })
     @returns({ name: 'success', type: ABIDataTypes.BOOL })
-    private _checkIn(_calldata: Calldata): BytesWriter {
-        const owner: Address = this.requireActiveVault();
+    private _checkIn(calldata: Calldata): BytesWriter {
+        const vaultId: u256 = calldata.readU256();
+        this.requireVaultOwner(vaultId);
+        this.requireVaultStatus(vaultId, STATUS_ACTIVE);
 
-        this.vaultHeartbeat.set(owner, u256.fromU64(Blockchain.block.number));
+        this.vaultHeartbeat.set(vaultId, u256.fromU64(Blockchain.block.number));
 
         const writer: BytesWriter = new BytesWriter(1);
         writer.writeBoolean(true);
@@ -197,19 +206,25 @@ export class EternalSentinel extends OP_NET {
     }
 
     // ── Deposit ───────────────────────────────────────────────────────────────
-    @method({ name: 'amount', type: ABIDataTypes.UINT256 })
+    @method(
+        { name: 'vaultId', type: ABIDataTypes.UINT256 },
+        { name: 'amount', type: ABIDataTypes.UINT256 },
+    )
     @returns({ name: 'success', type: ABIDataTypes.BOOL })
     private _deposit(calldata: Calldata): BytesWriter {
-        const owner: Address = this.requireActiveVault();
-
+        const vaultId: u256 = calldata.readU256();
         const amount: u256 = calldata.readU256();
+
+        this.requireVaultOwner(vaultId);
+        this.requireVaultStatus(vaultId, STATUS_ACTIVE);
+
         if (amount == u256.Zero) {
             throw new Revert('Deposit amount must be greater than zero');
         }
 
-        const newTotal: u256 = SafeMath.add(this.vaultDeposited.get(owner), amount);
-        this.vaultDeposited.set(owner, newTotal);
-        this.recalcTiers(owner, newTotal);
+        const newTotal: u256 = SafeMath.add(this.vaultDeposited.get(vaultId), amount);
+        this.vaultDeposited.set(vaultId, newTotal);
+        this.recalcTiers(vaultId, newTotal);
 
         const writer: BytesWriter = new BytesWriter(1);
         writer.writeBoolean(true);
@@ -217,20 +232,29 @@ export class EternalSentinel extends OP_NET {
     }
 
     // ── Set Beneficiary ───────────────────────────────────────────────────────
-    @method({ name: 'newBeneficiary', type: ABIDataTypes.ADDRESS })
+    @method(
+        { name: 'vaultId', type: ABIDataTypes.UINT256 },
+        { name: 'newBeneficiary', type: ABIDataTypes.ADDRESS },
+    )
     @returns({ name: 'success', type: ABIDataTypes.BOOL })
     private _setBeneficiary(calldata: Calldata): BytesWriter {
-        const owner: Address = this.requireActiveVault();
-
+        const vaultId: u256 = calldata.readU256();
         const newBeneficiary: Address = calldata.readAddress();
+
+        this.requireVaultOwner(vaultId);
+        this.requireVaultStatus(vaultId, STATUS_ACTIVE);
+
         if (newBeneficiary.isZero()) {
             throw new Revert('Beneficiary cannot be zero address');
         }
-        if (newBeneficiary == owner) {
+
+        const ownerU256: u256 = this.vaultOwner.get(vaultId);
+        const benefU256: u256 = this.addressToU256(newBeneficiary);
+        if (benefU256 == ownerU256) {
             throw new Revert('Beneficiary must differ from owner');
         }
 
-        this.vaultBeneficiary.setAsUint8Array(owner, newBeneficiary);
+        this.vaultBeneficiary.set(vaultId, benefU256);
 
         const writer: BytesWriter = new BytesWriter(1);
         writer.writeBoolean(true);
@@ -238,53 +262,51 @@ export class EternalSentinel extends OP_NET {
     }
 
     // ── Trigger Tier 1 (10% after ~6 months) ─────────────────────────────────
-    @method({ name: 'owner', type: ABIDataTypes.ADDRESS })
+    @method({ name: 'vaultId', type: ABIDataTypes.UINT256 })
     @returns({ name: 'releasedAmount', type: ABIDataTypes.UINT256 })
     private _triggerTier1(calldata: Calldata): BytesWriter {
-        const owner: Address = calldata.readAddress();
+        const vaultId: u256 = calldata.readU256();
 
-        if (this.statusOf(owner) != STATUS_ACTIVE) {
-            throw new Revert('Vault not in active state');
-        }
+        this.requireVaultStatus(vaultId, STATUS_ACTIVE);
 
-        const elapsed: u64 = this.elapsedSince(this.heartbeatOf(owner));
+        const lastBeat: u64 = this.vaultHeartbeat.get(vaultId).lo1;
+        const elapsed: u64 = this.elapsedSince(lastBeat);
         if (elapsed < TIER_1_BLOCKS) {
             throw new Revert('Tier 1 timeout not yet reached');
         }
 
-        this.vaultStatus.set(owner, STATUS_TIER1_RELEASED);
+        this.vaultStatus.set(vaultId, STATUS_TIER1_RELEASED);
 
-        const amount: u256 = this.vaultTier1Amt.get(owner);
+        const amount: u256 = this.vaultTier1Amt.get(vaultId);
         const writer: BytesWriter = new BytesWriter(32);
         writer.writeU256(amount);
         return writer;
     }
 
     // ── Trigger Tier 2 (90% after ~12 months) ────────────────────────────────
-    @method({ name: 'owner', type: ABIDataTypes.ADDRESS })
+    @method({ name: 'vaultId', type: ABIDataTypes.UINT256 })
     @returns({ name: 'releasedAmount', type: ABIDataTypes.UINT256 })
     private _triggerTier2(calldata: Calldata): BytesWriter {
-        const owner: Address = calldata.readAddress();
+        const vaultId: u256 = calldata.readU256();
 
-        if (this.statusOf(owner) != STATUS_TIER1_RELEASED) {
-            throw new Revert('Tier 1 must be released first');
-        }
+        this.requireVaultStatus(vaultId, STATUS_TIER1_RELEASED);
 
-        const elapsed: u64 = this.elapsedSince(this.heartbeatOf(owner));
+        const lastBeat: u64 = this.vaultHeartbeat.get(vaultId).lo1;
+        const elapsed: u64 = this.elapsedSince(lastBeat);
         if (elapsed < TIER_2_BLOCKS) {
             throw new Revert('Tier 2 timeout not yet reached');
         }
 
-        this.vaultStatus.set(owner, STATUS_FINALIZED);
+        this.vaultStatus.set(vaultId, STATUS_FINALIZED);
 
-        const amount: u256 = this.vaultTier2Amt.get(owner);
+        const amount: u256 = this.vaultTier2Amt.get(vaultId);
         const writer: BytesWriter = new BytesWriter(32);
         writer.writeU256(amount);
         return writer;
     }
 
     // ── View: Get Vault Status ────────────────────────────────────────────────
-    @method({ name: 'owner', type: ABIDataTypes.ADDRESS })
+    @method({ name: 'vaultId', type: ABIDataTypes.UINT256 })
     @returns(
         { name: 'currentStatus', type: ABIDataTypes.UINT256 },
         { name: 'lastHeartbeatBlock', type: ABIDataTypes.UINT64 },
@@ -294,16 +316,18 @@ export class EternalSentinel extends OP_NET {
         { name: 'tier2Amount', type: ABIDataTypes.UINT256 },
         { name: 'tier1BlocksRemaining', type: ABIDataTypes.UINT64 },
         { name: 'tier2BlocksRemaining', type: ABIDataTypes.UINT64 },
+        { name: 'owner', type: ABIDataTypes.UINT256 },
     )
     private _getStatus(calldata: Calldata): BytesWriter {
-        const owner: Address = calldata.readAddress();
+        const vaultId: u256 = calldata.readU256();
 
-        const currentStatus: u256 = this.statusOf(owner);
-        const lastBeat: u64 = this.heartbeatOf(owner);
+        const currentStatus: u256 = this.vaultStatus.get(vaultId);
+        const lastBeat: u64 = this.vaultHeartbeat.get(vaultId).lo1;
         const currentBlock: u64 = Blockchain.block.number;
-        const totalDeposited: u256 = this.vaultDeposited.get(owner);
-        const t1Amount: u256 = this.vaultTier1Amt.get(owner);
-        const t2Amount: u256 = this.vaultTier2Amt.get(owner);
+        const totalDeposited: u256 = this.vaultDeposited.get(vaultId);
+        const t1Amount: u256 = this.vaultTier1Amt.get(vaultId);
+        const t2Amount: u256 = this.vaultTier2Amt.get(vaultId);
+        const ownerVal: u256 = this.vaultOwner.get(vaultId);
 
         const elapsed: u64 = currentBlock >= lastBeat ? currentBlock - lastBeat : u64(0);
 
@@ -317,8 +341,8 @@ export class EternalSentinel extends OP_NET {
             tier2Remaining = TIER_2_BLOCKS - elapsed;
         }
 
-        // 32 + 8 + 8 + 32 + 32 + 32 + 8 + 8 = 160 bytes
-        const writer: BytesWriter = new BytesWriter(160);
+        // 32 + 8 + 8 + 32 + 32 + 32 + 8 + 8 + 32 = 192 bytes
+        const writer: BytesWriter = new BytesWriter(192);
         writer.writeU256(currentStatus);
         writer.writeU64(lastBeat);
         writer.writeU64(currentBlock);
@@ -327,31 +351,65 @@ export class EternalSentinel extends OP_NET {
         writer.writeU256(t2Amount);
         writer.writeU64(tier1Remaining);
         writer.writeU64(tier2Remaining);
+        writer.writeU256(ownerVal);
+        return writer;
+    }
+
+    // ── View: Has Vault (checks if a vaultId exists) ─────────────────────────
+    @method({ name: 'vaultId', type: ABIDataTypes.UINT256 })
+    @returns({ name: 'exists', type: ABIDataTypes.BOOL })
+    private _hasVault(calldata: Calldata): BytesWriter {
+        const vaultId: u256 = calldata.readU256();
+        const exists: bool = this.vaultStatus.get(vaultId) != STATUS_UNINITIALIZED;
+
+        const writer: BytesWriter = new BytesWriter(1);
+        writer.writeBoolean(exists);
         return writer;
     }
 
     // ── View: Get Beneficiary ─────────────────────────────────────────────────
-    @method({ name: 'owner', type: ABIDataTypes.ADDRESS })
-    @returns({ name: 'beneficiary', type: ABIDataTypes.ADDRESS })
+    @method({ name: 'vaultId', type: ABIDataTypes.UINT256 })
+    @returns({ name: 'beneficiary', type: ABIDataTypes.UINT256 })
     private _getBeneficiary(calldata: Calldata): BytesWriter {
-        const owner: Address = calldata.readAddress();
-        const benefBytes: Uint8Array = this.vaultBeneficiary.getAsUint8Array(owner);
+        const vaultId: u256 = calldata.readU256();
+        const benefVal: u256 = this.vaultBeneficiary.get(vaultId);
 
-        // 32 bytes for ADDRESS type
         const writer: BytesWriter = new BytesWriter(32);
-        writer.writeBytes(benefBytes);
+        writer.writeU256(benefVal);
         return writer;
     }
 
-    // ── View: Has Vault ───────────────────────────────────────────────────────
+    // ── View: Get Vault Count for Owner ───────────────────────────────────────
     @method({ name: 'owner', type: ABIDataTypes.ADDRESS })
-    @returns({ name: 'exists', type: ABIDataTypes.BOOL })
-    private _hasVault(calldata: Calldata): BytesWriter {
+    @returns({ name: 'count', type: ABIDataTypes.UINT256 })
+    private _getVaultCount(calldata: Calldata): BytesWriter {
         const owner: Address = calldata.readAddress();
-        const exists: bool = this.statusOf(owner) != STATUS_UNINITIALIZED;
+        const count: u256 = this.ownerVaultCount.get(owner);
 
-        const writer: BytesWriter = new BytesWriter(1);
-        writer.writeBoolean(exists);
+        const writer: BytesWriter = new BytesWriter(32);
+        writer.writeU256(count);
+        return writer;
+    }
+
+    // ── View: Get Vault ID by Index ───────────────────────────────────────────
+    @method(
+        { name: 'owner', type: ABIDataTypes.ADDRESS },
+        { name: 'index', type: ABIDataTypes.UINT256 },
+    )
+    @returns({ name: 'vaultId', type: ABIDataTypes.UINT256 })
+    private _getVaultIdByIndex(calldata: Calldata): BytesWriter {
+        const owner: Address = calldata.readAddress();
+        const index: u256 = calldata.readU256();
+
+        const count: u256 = this.ownerVaultCount.get(owner);
+        if (index >= count) {
+            throw new Revert('Vault index out of bounds');
+        }
+
+        const vaultId: u256 = this.ownerVaults.get(owner).get(index.toUint8Array(true));
+
+        const writer: BytesWriter = new BytesWriter(32);
+        writer.writeU256(vaultId);
         return writer;
     }
 

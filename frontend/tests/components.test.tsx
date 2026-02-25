@@ -11,7 +11,7 @@ import type { SentinelStatus } from '../src/types/sentinel';
 
 // ── VaultListPage mocks (must be before import) ────────────────────────────
 vi.mock('../src/utils/vaultFetch', () => ({
-    fetchVaultSummary: vi.fn(),
+    fetchVaultStatus: vi.fn(),
     resolveAddress: vi.fn(),
 }));
 vi.mock('../src/services/ContractService', () => ({
@@ -22,10 +22,12 @@ vi.mock('../src/services/ProviderService', () => ({
 }));
 
 import { VaultListPage } from '../src/components/VaultListPage';
-import { fetchVaultSummary } from '../src/utils/vaultFetch';
-const mockFetch = fetchVaultSummary as ReturnType<typeof vi.fn>;
+import { fetchVaultStatus } from '../src/utils/vaultFetch';
+const mockFetch = fetchVaultStatus as ReturnType<typeof vi.fn>;
 
 // ── Fixtures ──────────────────────────────────────────────────────────────────
+
+const OWNER_U256 = BigInt('0x' + 'ab'.repeat(32));
 
 const ACTIVE_STATUS: SentinelStatus = {
     currentStatus: 1n,
@@ -36,6 +38,7 @@ const ACTIVE_STATUS: SentinelStatus = {
     tier2Amount: 9_000_000n,
     tier1BlocksRemaining: 25_280n, // well before timeout
     tier2BlocksRemaining: 51_560n,
+    owner: OWNER_U256,
 };
 
 const TIER1_READY_STATUS: SentinelStatus = {
@@ -265,14 +268,13 @@ const WALLET = 'opt1pabcdef1234567890abcdef1234567890';
 const LIST_PROPS = {
     network: NETWORK,
     walletAddress: WALLET,
-    trackedVaults: [WALLET],
+    vaultIds: [1n],
     onSelectVault: vi.fn(),
     onCreateVault: vi.fn(),
-    connectedWalletHasVault: null as boolean | null,
 };
 
 const VAULT_STATUS_RESPONSE = {
-    hasVault: true,
+    vaultId: 1n,
     status: {
         currentStatus: 1n,
         lastHeartbeatBlock: 1000n,
@@ -282,6 +284,7 @@ const VAULT_STATUS_RESPONSE = {
         tier2Amount: 90_000n,
         tier1BlocksRemaining: 25_000n,
         tier2BlocksRemaining: 51_000n,
+        owner: OWNER_U256,
     },
     error: null,
 };
@@ -305,47 +308,34 @@ describe('VaultListPage — always shows content', () => {
         expect(screen.getAllByText('Loading…').length).toBeGreaterThanOrEqual(1);
     });
 
-    it('shows "You" badge on connected wallet card', () => {
+    it('shows "Vault #1" as card title', () => {
         mockFetch.mockReturnValue(new Promise(() => {}));
         render(<VaultListPage {...LIST_PROPS} />);
-        expect(screen.getByText('You')).toBeInTheDocument();
+        expect(screen.getByText('Vault #1')).toBeInTheDocument();
     });
 
     it('shows "Open Vault →" after fetch resolves with vault', async () => {
-        render(<VaultListPage {...LIST_PROPS} connectedWalletHasVault={true} />);
+        render(<VaultListPage {...LIST_PROPS} />);
         await waitFor(() => {
             expect(screen.getByText('Open Vault →')).toBeInTheDocument();
         });
     });
 
-    it('shows "Create Vault →" when wallet has no vault', async () => {
-        mockFetch.mockResolvedValue({ hasVault: false, status: null, error: null });
-        render(<VaultListPage {...LIST_PROPS} connectedWalletHasVault={false} />);
-        await waitFor(() => {
-            expect(screen.getByRole('button', { name: /create vault/i })).toBeInTheDocument();
-        });
-    });
-
     it('shows error message in card when fetch fails (does not hide card)', async () => {
-        mockFetch.mockResolvedValue({ hasVault: false, status: null, error: 'RPC timeout' });
+        mockFetch.mockResolvedValue({ vaultId: 1n, status: null, error: 'RPC timeout' });
         render(<VaultListPage {...LIST_PROPS} />);
         await waitFor(() => {
             expect(screen.getByText('RPC timeout')).toBeInTheDocument();
         });
     });
 
-    it('shows fallback text when trackedVaults is empty', () => {
-        render(<VaultListPage {...LIST_PROPS} trackedVaults={[]} />);
-        expect(screen.getByText(/connect your wallet/i)).toBeInTheDocument();
+    it('shows fallback text when vaultIds is empty', () => {
+        render(<VaultListPage {...LIST_PROPS} vaultIds={[]} />);
+        expect(screen.getByText(/no vaults yet/i)).toBeInTheDocument();
     });
 
-    it('shows "+ New Vault" button when wallet has vault', () => {
-        render(<VaultListPage {...LIST_PROPS} connectedWalletHasVault={true} />);
+    it('always shows "+ New Vault" button', () => {
+        render(<VaultListPage {...LIST_PROPS} />);
         expect(screen.getByRole('button', { name: /new vault/i })).toBeInTheDocument();
-    });
-
-    it('does NOT show "+ New Vault" while vault status is unknown (null)', () => {
-        render(<VaultListPage {...LIST_PROPS} connectedWalletHasVault={null} />);
-        expect(screen.queryByRole('button', { name: /new vault/i })).not.toBeInTheDocument();
     });
 });

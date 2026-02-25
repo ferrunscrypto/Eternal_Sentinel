@@ -12,7 +12,8 @@
     "dependencies": {
         "@btc-vision/as-bignum": "latest",
         "@btc-vision/btc-runtime": "latest",
-        "@btc-vision/opnet-transform": "latest"
+        "@btc-vision/opnet-transform": "latest",
+        "dotenv": "^17.3.1"
     },
     "devDependencies": {
         "@testing-library/jest-dom": "^6.9.1",

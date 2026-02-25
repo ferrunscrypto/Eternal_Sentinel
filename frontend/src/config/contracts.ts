@@ -10,7 +10,7 @@ const CONTRACT_ADDRESSES: Map<string, ContractAddresses> = new Map([
         sentinel: 'opr1sqp533uq2wu5khzwmh5m76kxguln5h64kqyy2hc86',
     }],
     ['testnet', {
-        sentinel: 'opt1sqzxtax4v98vkplet6ue8kuky4gdv0t3f359xgx24',
+        sentinel: 'opt1sqquf8h8s8n43xyepj7qhyu2e4mam849rvg68363k',
     }],
     ['mainnet', {
         sentinel: 'YOUR_MAINNET_CONTRACT_ADDRESS',

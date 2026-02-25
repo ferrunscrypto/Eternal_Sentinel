@@ -7,6 +7,7 @@ export interface SentinelStatus {
     readonly tier2Amount: bigint;
     readonly tier1BlocksRemaining: bigint;
     readonly tier2BlocksRemaining: bigint;
+    readonly owner: bigint;
 }
 
 export interface HeartbeatInfo {

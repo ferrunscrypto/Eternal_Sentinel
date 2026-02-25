@@ -10,7 +10,6 @@ import { renderHook, waitFor } from '@testing-library/react';
 // ── Hoisted mocks (must be declared before vi.mock calls) ─────────────────────
 const {
     mockGetStatus,
-    mockHasVault,
     mockCreateVault,
     mockCheckIn,
     mockTriggerTier1,
@@ -21,7 +20,6 @@ const {
     mockGetPublicKeysInfoRaw,
 } = vi.hoisted(() => {
     const mockGetStatus = vi.fn();
-    const mockHasVault = vi.fn();
     const mockCreateVault = vi.fn();
     const mockCheckIn = vi.fn();
     const mockTriggerTier1 = vi.fn();
@@ -31,7 +29,6 @@ const {
 
     const mockContract = {
         _getStatus: mockGetStatus,
-        _hasVault: mockHasVault,
         _createVault: mockCreateVault,
         _checkIn: mockCheckIn,
         _triggerTier1: mockTriggerTier1,
@@ -51,7 +48,6 @@ const {
 
     return {
         mockGetStatus,
-        mockHasVault,
         mockCreateVault,
         mockCheckIn,
         mockTriggerTier1,
@@ -93,7 +89,7 @@ vi.mock('@btc-vision/walletconnect', () => ({
 
 vi.mock('@btc-vision/transaction', () => ({
     Address: {
-        fromString: vi.fn().mockReturnValue({ toString: () => 'ab'.repeat(32) }),
+        fromString: vi.fn().mockReturnValue({ toString: () => '0x' + 'ab'.repeat(32) }),
     },
 }));
 
@@ -101,6 +97,9 @@ vi.mock('@btc-vision/transaction', () => ({
 import { useSentinel } from '../src/hooks/useSentinel';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
+
+// The owner u256 value that corresponds to address '0x' + 'ab'.repeat(32)
+const OWNER_U256 = BigInt('0x' + 'ab'.repeat(32));
 
 const STATUS_PROPS = {
     currentStatus: 1n,
@@ -111,15 +110,27 @@ const STATUS_PROPS = {
     tier2Amount: 9_000_000n,
     tier1BlocksRemaining: 25_000n,
     tier2BlocksRemaining: 51_000n,
+    owner: OWNER_U256,
 };
 
 function mockActiveVault() {
-    mockHasVault.mockResolvedValue({ properties: { exists: true } });
     mockGetStatus.mockResolvedValue({ properties: STATUS_PROPS });
 }
 
 function mockNoVault() {
-    mockHasVault.mockResolvedValue({ properties: { exists: false } });
+    mockGetStatus.mockResolvedValue({
+        properties: {
+            currentStatus: 0n,
+            lastHeartbeatBlock: 0n,
+            currentBlock: 0n,
+            totalDeposited: 0n,
+            tier1Amount: 0n,
+            tier2Amount: 0n,
+            tier1BlocksRemaining: 0n,
+            tier2BlocksRemaining: 0n,
+            owner: 0n,
+        },
+    });
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -131,25 +142,25 @@ describe('useSentinel — initial state', () => {
 
     it('returns connected=true when wallet and network are present', () => {
         mockNoVault();
-        const { result } = renderHook(() => useSentinel());
+        const { result } = renderHook(() => useSentinel(1n));
         expect(result.current.connected).toBe(true);
     });
 
     it('returns correct network name', () => {
         mockNoVault();
-        const { result } = renderHook(() => useSentinel());
+        const { result } = renderHook(() => useSentinel(1n));
         expect(result.current.networkName).toBe('OPNet Testnet');
     });
 
     it('returns walletAddress from hook', () => {
         mockNoVault();
-        const { result } = renderHook(() => useSentinel());
+        const { result } = renderHook(() => useSentinel(1n));
         expect(result.current.walletAddress).toBe('opt1ptest');
     });
 
     it('returns contractDeployed=true when contract is found', () => {
         mockNoVault();
-        const { result } = renderHook(() => useSentinel());
+        const { result } = renderHook(() => useSentinel(1n));
         expect(result.current.contractDeployed).toBe(true);
     });
 });
@@ -161,18 +172,41 @@ describe('useSentinel — vault loading', () => {
 
     it('sets status after loading an active vault', async () => {
         mockActiveVault();
-        const { result } = renderHook(() => useSentinel());
+        const { result } = renderHook(() => useSentinel(1n));
 
         await waitFor(() => expect(result.current.status).not.toBeNull(), { timeout: 3000 });
 
         expect(result.current.status?.currentStatus).toBe(1n);
         expect(result.current.status?.totalDeposited).toBe(10_000_000n);
+        expect(result.current.status?.owner).toBe(OWNER_U256);
+    });
+
+    it('isOwner is true when status.owner matches connected wallet', async () => {
+        mockActiveVault();
+        const { result } = renderHook(() => useSentinel(1n));
+
+        await waitFor(() => expect(result.current.status).not.toBeNull(), { timeout: 3000 });
+
         expect(result.current.isOwner).toBe(true);
     });
 
-    it('returns null status when vault does not exist', async () => {
+    it('isOwner is false when status.owner differs from connected wallet', async () => {
+        mockGetStatus.mockResolvedValue({
+            properties: {
+                ...STATUS_PROPS,
+                owner: 999n, // different owner
+            },
+        });
+        const { result } = renderHook(() => useSentinel(1n));
+
+        await waitFor(() => expect(result.current.status).not.toBeNull(), { timeout: 3000 });
+
+        expect(result.current.isOwner).toBe(false);
+    });
+
+    it('returns null status when vault does not exist (status=0)', async () => {
         mockNoVault();
-        const { result } = renderHook(() => useSentinel());
+        const { result } = renderHook(() => useSentinel(1n));
 
         await waitFor(() => expect(result.current.loading).toBe(false), { timeout: 3000 });
 
@@ -181,10 +215,9 @@ describe('useSentinel — vault loading', () => {
     });
 
     it('sets error on getStatus failure', async () => {
-        mockHasVault.mockResolvedValue({ properties: { exists: true } });
         mockGetStatus.mockRejectedValue(new Error('RPC timeout'));
 
-        const { result } = renderHook(() => useSentinel());
+        const { result } = renderHook(() => useSentinel(1n));
 
         await waitFor(() => expect(result.current.error).not.toBeNull(), { timeout: 3000 });
 
@@ -192,10 +225,9 @@ describe('useSentinel — vault loading', () => {
     });
 
     it('sets error when getStatus returns error property', async () => {
-        mockHasVault.mockResolvedValue({ properties: { exists: true } });
         mockGetStatus.mockResolvedValue({ error: 'Contract call failed', properties: {} });
 
-        const { result } = renderHook(() => useSentinel());
+        const { result } = renderHook(() => useSentinel(1n));
 
         await waitFor(() => expect(result.current.error).not.toBeNull(), { timeout: 3000 });
 
@@ -210,7 +242,7 @@ describe('useSentinel — tier status interpretation', () => {
 
     it('tier1Amount and tier2Amount are populated from status', async () => {
         mockActiveVault();
-        const { result } = renderHook(() => useSentinel());
+        const { result } = renderHook(() => useSentinel(1n));
 
         await waitFor(() => expect(result.current.status).not.toBeNull(), { timeout: 3000 });
 
@@ -220,7 +252,7 @@ describe('useSentinel — tier status interpretation', () => {
 
     it('tier1BlocksRemaining is populated', async () => {
         mockActiveVault();
-        const { result } = renderHook(() => useSentinel());
+        const { result } = renderHook(() => useSentinel(1n));
 
         await waitFor(() => expect(result.current.status).not.toBeNull(), { timeout: 3000 });
 
@@ -228,7 +260,6 @@ describe('useSentinel — tier status interpretation', () => {
     });
 
     it('finalized status (3n) is reflected correctly', async () => {
-        mockHasVault.mockResolvedValue({ properties: { exists: true } });
         mockGetStatus.mockResolvedValue({
             properties: {
                 ...STATUS_PROPS,
@@ -238,7 +269,7 @@ describe('useSentinel — tier status interpretation', () => {
             },
         });
 
-        const { result } = renderHook(() => useSentinel());
+        const { result } = renderHook(() => useSentinel(1n));
 
         await waitFor(() => expect(result.current.status).not.toBeNull(), { timeout: 3000 });
 
@@ -248,11 +279,10 @@ describe('useSentinel — tier status interpretation', () => {
 
 describe('useSentinel — contractDeployed=false when contract is null', () => {
     it('returns false when getSentinelContract persistently returns null', () => {
-        // Use mockReturnValue (not Once) so all renders (including strict-mode double-render) see null
         mockGetSentinelContract.mockReturnValue(null);
-        const { result } = renderHook(() => useSentinel());
+        const { result } = renderHook(() => useSentinel(1n));
         expect(result.current.contractDeployed).toBe(false);
         // Restore default so other tests aren't affected
-        mockGetSentinelContract.mockReturnValue({ _getStatus: mockGetStatus, _hasVault: mockHasVault });
+        mockGetSentinelContract.mockReturnValue({ _getStatus: mockGetStatus });
     });
 });

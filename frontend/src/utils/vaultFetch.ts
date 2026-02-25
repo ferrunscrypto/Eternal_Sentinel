@@ -19,33 +19,56 @@ export async function resolveAddress(bech32: string, network: Network): Promise<
 }
 
 export interface VaultSummary {
-    readonly hasVault: boolean;
+    readonly vaultId: bigint;
     readonly status: SentinelStatus | null;
     readonly error: string | null;
 }
 
-export async function fetchVaultSummary(
+/**
+ * Fetch all vault IDs owned by a given bech32 address.
+ */
+export async function fetchVaultIdsForOwner(
     ownerBech32: string,
+    network: Network,
+): Promise<bigint[]> {
+    const contract = contractService.getSentinelContract(network);
+    if (!contract) return [];
+
+    const addr = await resolveAddress(ownerBech32, network);
+
+    const countResult = await contract._getVaultCount(addr as never);
+    const count: bigint = countResult.properties.count;
+
+    if (count === 0n) return [];
+
+    const ids: bigint[] = [];
+    for (let i = 0n; i < count; i++) {
+        const idResult = await contract._getVaultIdByIndex(addr as never, i);
+        ids.push(idResult.properties.vaultId);
+    }
+
+    return ids;
+}
+
+/**
+ * Fetch full status for a specific vault by its ID.
+ */
+export async function fetchVaultStatus(
+    vaultId: bigint,
     network: Network,
 ): Promise<VaultSummary> {
     try {
         const contract = contractService.getSentinelContract(network);
-        if (!contract) return { hasVault: false, status: null, error: 'Contract not deployed' };
+        if (!contract) return { vaultId, status: null, error: 'Contract not deployed' };
 
-        const addr = await resolveAddress(ownerBech32, network);
-
-        const hasVaultResult = await contract._hasVault(addr as never);
-        const hasVault: boolean = hasVaultResult.properties.exists;
-        if (!hasVault) return { hasVault: false, status: null, error: null };
-
-        const result = await contract._getStatus(addr as never);
+        const result = await contract._getStatus(vaultId);
         if ('error' in result && result.error) {
-            return { hasVault: true, status: null, error: String(result.error) };
+            return { vaultId, status: null, error: String(result.error) };
         }
 
         const p = result.properties;
         return {
-            hasVault: true,
+            vaultId,
             status: {
                 currentStatus: p.currentStatus,
                 lastHeartbeatBlock: p.lastHeartbeatBlock,
@@ -55,28 +78,15 @@ export async function fetchVaultSummary(
                 tier2Amount: p.tier2Amount,
                 tier1BlocksRemaining: p.tier1BlocksRemaining,
                 tier2BlocksRemaining: p.tier2BlocksRemaining,
+                owner: p.owner,
             },
             error: null,
         };
     } catch (err) {
         return {
-            hasVault: false,
+            vaultId,
             status: null,
             error: err instanceof Error ? err.message : 'Failed to fetch vault',
         };
     }
-}
-
-const STORAGE_KEY = 'es_tracked_vaults';
-
-export function loadTrackedVaults(): string[] {
-    try {
-        return JSON.parse(localStorage.getItem(STORAGE_KEY) ?? '[]') as string[];
-    } catch {
-        return [];
-    }
-}
-
-export function saveTrackedVaults(vaults: string[]): void {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(vaults));
 }

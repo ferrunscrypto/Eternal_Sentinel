@@ -212,8 +212,11 @@ describe('Platform fee', () => {
 
 // ── Multi-vault isolation ─────────────────────────────────────────────────────
 
-describe('Multi-vault isolation (conceptual)', () => {
+describe('Multi-vault isolation', () => {
+    // Simulate vault storage keyed by vaultId (bigint)
     type Vault = {
+        vaultId: bigint;
+        owner: bigint;
         status: bigint;
         lastBeat: bigint;
         deposited: bigint;
@@ -221,8 +224,12 @@ describe('Multi-vault isolation (conceptual)', () => {
         tier2: bigint;
     };
 
-    function createVault(currentBlock: bigint, depositAmount: bigint): Vault {
+    let nextId = 1n;
+    function createVault(owner: bigint, currentBlock: bigint, depositAmount: bigint): Vault {
+        const id = nextId++;
         return {
+            vaultId: id,
+            owner,
             status: STATUS_ACTIVE,
             lastBeat: currentBlock,
             deposited: depositAmount,
@@ -231,24 +238,96 @@ describe('Multi-vault isolation (conceptual)', () => {
         };
     }
 
+    it('creating multiple vaults produces unique sequential IDs', () => {
+        nextId = 1n;
+        const ownerA = 100n;
+        const v1 = createVault(ownerA, 0n, 1_000_000n);
+        const v2 = createVault(ownerA, 0n, 2_000_000n);
+        const v3 = createVault(ownerA, 0n, 3_000_000n);
+
+        expect(v1.vaultId).toBe(1n);
+        expect(v2.vaultId).toBe(2n);
+        expect(v3.vaultId).toBe(3n);
+    });
+
+    it('vault count increments correctly per owner', () => {
+        // Simulate owner vault count tracking
+        const ownerCounts = new Map<bigint, bigint>();
+        const getCount = (o: bigint) => ownerCounts.get(o) ?? 0n;
+        const incCount = (o: bigint) => ownerCounts.set(o, getCount(o) + 1n);
+
+        const ownerA = 100n;
+        const ownerB = 200n;
+
+        incCount(ownerA); // vault 1
+        incCount(ownerA); // vault 2
+        incCount(ownerB); // vault 3
+
+        expect(getCount(ownerA)).toBe(2n);
+        expect(getCount(ownerB)).toBe(1n);
+    });
+
+    it('vault ID indexing returns correct IDs for an owner', () => {
+        // Simulate ownerVaults[owner][index] = vaultId
+        const ownerVaults = new Map<bigint, bigint[]>();
+        const addVault = (owner: bigint, vaultId: bigint) => {
+            if (!ownerVaults.has(owner)) ownerVaults.set(owner, []);
+            ownerVaults.get(owner)!.push(vaultId);
+        };
+
+        const ownerA = 100n;
+        addVault(ownerA, 1n);
+        addVault(ownerA, 3n);
+        addVault(ownerA, 7n);
+
+        const vaults = ownerVaults.get(ownerA)!;
+        expect(vaults[0]).toBe(1n);
+        expect(vaults[1]).toBe(3n);
+        expect(vaults[2]).toBe(7n);
+    });
+
+    it('ownership check logic — only owner can check-in/deposit/setBeneficiary', () => {
+        const ownerA = 100n;
+        const ownerB = 200n;
+        nextId = 10n;
+        const vault = createVault(ownerA, 0n, 1_000_000n);
+
+        const isOwner = (sender: bigint) => sender === vault.owner;
+        expect(isOwner(ownerA)).toBe(true);
+        expect(isOwner(ownerB)).toBe(false);
+    });
+
+    it('anyone can trigger tier1/tier2 (no ownership required)', () => {
+        // The contract does NOT check ownership for triggerTier1/triggerTier2
+        // It only checks vault status and elapsed blocks
+        nextId = 20n;
+        const vault = createVault(100n, 0n, 1_000_000n);
+        const currentBlock = TIER_1_BLOCKS + 1n;
+
+        // Any sender can trigger — no ownership check
+        expect(vault.status).toBe(STATUS_ACTIVE);
+        expect(canTriggerTier1(vault.lastBeat, currentBlock)).toBe(true);
+    });
+
     it('two vaults with different creation blocks have independent countdowns', () => {
-        const vaultA = createVault(0n, 1_000_000n);
-        const vaultB = createVault(5_000n, 1_000_000n);
-        // Use currentBlock=15_000 so neither vault has exceeded TIER_1_BLOCKS (26_280)
+        nextId = 30n;
+        const vaultA = createVault(100n, 0n, 1_000_000n);
+        const vaultB = createVault(100n, 5_000n, 1_000_000n);
         const currentBlock = 15_000n;
 
-        const remainingA = tier1Remaining(vaultA.lastBeat, currentBlock); // elapsed=15_000
-        const remainingB = tier1Remaining(vaultB.lastBeat, currentBlock); // elapsed=10_000
+        const remainingA = tier1Remaining(vaultA.lastBeat, currentBlock);
+        const remainingB = tier1Remaining(vaultB.lastBeat, currentBlock);
 
         expect(remainingA).toBe(TIER_1_BLOCKS - 15_000n);
         expect(remainingB).toBe(TIER_1_BLOCKS - 10_000n);
         expect(remainingA).not.toBe(remainingB);
-        expect(remainingA).toBeLessThan(remainingB); // A started earlier → less time left
+        expect(remainingA).toBeLessThan(remainingB);
     });
 
     it('two vaults have independent tier amounts', () => {
-        const vaultA = createVault(0n, 500_000n);
-        const vaultB = createVault(0n, 2_000_000n);
+        nextId = 40n;
+        const vaultA = createVault(100n, 0n, 500_000n);
+        const vaultB = createVault(100n, 0n, 2_000_000n);
 
         expect(vaultA.tier1).toBe(50_000n);
         expect(vaultB.tier1).toBe(200_000n);
@@ -257,10 +336,9 @@ describe('Multi-vault isolation (conceptual)', () => {
     });
 
     it('triggering one vault does not affect the other', () => {
-        // State mutation is isolated by owner key — verified at the logic level:
-        // each vault's canTrigger is evaluated independently
-        const vaultA = createVault(0n, 1_000_000n);
-        const vaultB = createVault(0n, 1_000_000n);
+        nextId = 50n;
+        const vaultA = createVault(100n, 0n, 1_000_000n);
+        const vaultB = createVault(100n, 0n, 1_000_000n);
         const currentBlock = TIER_1_BLOCKS + 1n;
 
         // Trigger vaultA

@@ -8,33 +8,31 @@ import { VaultListPage } from '../src/components/VaultListPage';
 
 // ── Mock dependencies ────────────────────────────────────────────────────────
 
-// Mock fetchVaultSummary so tests don't hit the network
 vi.mock('../src/utils/vaultFetch', () => ({
-    fetchVaultSummary: vi.fn(),
+    fetchVaultStatus: vi.fn(),
 }));
 
-import { fetchVaultSummary } from '../src/utils/vaultFetch';
-const mockFetch = fetchVaultSummary as ReturnType<typeof vi.fn>;
+import { fetchVaultStatus } from '../src/utils/vaultFetch';
+const mockFetch = fetchVaultStatus as ReturnType<typeof vi.fn>;
 
 // Minimal Network stub
 const network = { bech32: 'opt' } as never;
 
 const WALLET = 'opt1pabcdef1234567890abcdef1234567890';
+const OWNER_U256 = BigInt('0x' + 'ab'.repeat(32));
 
 const defaultProps = {
     network,
     walletAddress: WALLET,
-    trackedVaults: [WALLET],
+    vaultIds: [1n],
     onSelectVault: vi.fn(),
     onCreateVault: vi.fn(),
-    connectedWalletHasVault: null as boolean | null,
 };
 
 beforeEach(() => {
     vi.clearAllMocks();
-    // Default: return a vault with status
     mockFetch.mockResolvedValue({
-        hasVault: true,
+        vaultId: 1n,
         status: {
             currentStatus: 1n,
             lastHeartbeatBlock: 1000n,
@@ -44,6 +42,7 @@ beforeEach(() => {
             tier2Amount: 90_000n,
             tier1BlocksRemaining: 25_000n,
             tier2BlocksRemaining: 51_000n,
+            owner: OWNER_U256,
         },
         error: null,
     });
@@ -53,7 +52,6 @@ beforeEach(() => {
 
 describe('VaultListPage — always shows content', () => {
     it('renders the "Vaults" heading immediately (before fetch completes)', () => {
-        // fetch never resolves during this test
         mockFetch.mockReturnValue(new Promise(() => {}));
 
         render(<VaultListPage {...defaultProps} />);
@@ -66,60 +64,53 @@ describe('VaultListPage — always shows content', () => {
 
         render(<VaultListPage {...defaultProps} />);
 
-        expect(screen.getByText('Loading…')).toBeInTheDocument();
+        expect(screen.getAllByText('Loading…').length).toBeGreaterThanOrEqual(1);
     });
 
     it('shows vault details after fetch resolves (vault exists)', async () => {
-        render(<VaultListPage {...defaultProps} connectedWalletHasVault={true} />);
+        render(<VaultListPage {...defaultProps} />);
 
         await waitFor(() => {
             expect(screen.getByText('Open Vault →')).toBeInTheDocument();
         });
     });
 
-    it('shows "Create Vault →" button when wallet has no vault', async () => {
-        mockFetch.mockResolvedValue({ hasVault: false, status: null, error: null });
+    it('shows "Vault #1" as card title', () => {
+        mockFetch.mockReturnValue(new Promise(() => {}));
 
-        render(<VaultListPage {...defaultProps} connectedWalletHasVault={false} />);
+        render(<VaultListPage {...defaultProps} />);
 
-        await waitFor(() => {
-            expect(screen.getByRole('button', { name: /create vault/i })).toBeInTheDocument();
-        });
+        expect(screen.getByText('Vault #1')).toBeInTheDocument();
     });
 
-    it('shows "Open Vault →" even when fetch errors (does not hide card)', async () => {
-        mockFetch.mockResolvedValue({ hasVault: false, status: null, error: 'RPC timeout' });
+    it('shows error message in card when fetch errors (does not hide card)', async () => {
+        mockFetch.mockResolvedValue({ vaultId: 1n, status: null, error: 'RPC timeout' });
 
         render(<VaultListPage {...defaultProps} />);
 
         await waitFor(() => {
-            // Error message shown in card
             expect(screen.getByText('RPC timeout')).toBeInTheDocument();
         });
     });
 
-    it('shows "Connect your wallet" when trackedVaults is empty', () => {
-        render(<VaultListPage {...defaultProps} trackedVaults={[]} />);
+    it('shows fallback text when vaultIds is empty', () => {
+        render(<VaultListPage {...defaultProps} vaultIds={[]} />);
 
-        expect(screen.getByText(/connect your wallet/i)).toBeInTheDocument();
+        expect(screen.getByText(/no vaults yet/i)).toBeInTheDocument();
     });
 
-    it('shows "+ New Vault" button when wallet already has a vault', () => {
-        render(<VaultListPage {...defaultProps} connectedWalletHasVault={true} />);
+    it('always shows "+ New Vault" button', () => {
+        render(<VaultListPage {...defaultProps} />);
 
         expect(screen.getByRole('button', { name: /new vault/i })).toBeInTheDocument();
     });
 
-    it('does NOT show "+ New Vault" when vault status is still loading (null)', () => {
-        render(<VaultListPage {...defaultProps} connectedWalletHasVault={null} />);
-
-        expect(screen.queryByRole('button', { name: /new vault/i })).not.toBeInTheDocument();
-    });
-
-    it('shows "You" badge on connected wallet card', () => {
+    it('shows multiple vault cards when multiple IDs provided', () => {
         mockFetch.mockReturnValue(new Promise(() => {}));
-        render(<VaultListPage {...defaultProps} />);
+        render(<VaultListPage {...defaultProps} vaultIds={[1n, 2n, 5n]} />);
 
-        expect(screen.getByText('You')).toBeInTheDocument();
+        expect(screen.getByText('Vault #1')).toBeInTheDocument();
+        expect(screen.getByText('Vault #2')).toBeInTheDocument();
+        expect(screen.getByText('Vault #5')).toBeInTheDocument();
     });
 });

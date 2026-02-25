@@ -10,14 +10,16 @@ export const ETERNAL_SENTINEL_ABI: BitcoinInterfaceAbi = [
             { name: 'beneficiary', type: ABIDataTypes.ADDRESS },
         ],
         outputs: [
-            { name: 'success', type: ABIDataTypes.BOOL },
+            { name: 'vaultId', type: ABIDataTypes.UINT256 },
         ],
     },
     {
         name: '_checkIn',
         type: BitcoinAbiTypes.Function,
         constant: false,
-        inputs: [],
+        inputs: [
+            { name: 'vaultId', type: ABIDataTypes.UINT256 },
+        ],
         outputs: [
             { name: 'success', type: ABIDataTypes.BOOL },
         ],
@@ -27,6 +29,7 @@ export const ETERNAL_SENTINEL_ABI: BitcoinInterfaceAbi = [
         type: BitcoinAbiTypes.Function,
         constant: false,
         inputs: [
+            { name: 'vaultId', type: ABIDataTypes.UINT256 },
             { name: 'newBeneficiary', type: ABIDataTypes.ADDRESS },
         ],
         outputs: [
@@ -38,6 +41,7 @@ export const ETERNAL_SENTINEL_ABI: BitcoinInterfaceAbi = [
         type: BitcoinAbiTypes.Function,
         constant: false,
         inputs: [
+            { name: 'vaultId', type: ABIDataTypes.UINT256 },
             { name: 'amount', type: ABIDataTypes.UINT256 },
         ],
         outputs: [
@@ -49,7 +53,7 @@ export const ETERNAL_SENTINEL_ABI: BitcoinInterfaceAbi = [
         type: BitcoinAbiTypes.Function,
         constant: false,
         inputs: [
-            { name: 'owner', type: ABIDataTypes.ADDRESS },
+            { name: 'vaultId', type: ABIDataTypes.UINT256 },
         ],
         outputs: [
             { name: 'releasedAmount', type: ABIDataTypes.UINT256 },
@@ -60,7 +64,7 @@ export const ETERNAL_SENTINEL_ABI: BitcoinInterfaceAbi = [
         type: BitcoinAbiTypes.Function,
         constant: false,
         inputs: [
-            { name: 'owner', type: ABIDataTypes.ADDRESS },
+            { name: 'vaultId', type: ABIDataTypes.UINT256 },
         ],
         outputs: [
             { name: 'releasedAmount', type: ABIDataTypes.UINT256 },
@@ -73,7 +77,7 @@ export const ETERNAL_SENTINEL_ABI: BitcoinInterfaceAbi = [
         type: BitcoinAbiTypes.Function,
         constant: true,
         inputs: [
-            { name: 'owner', type: ABIDataTypes.ADDRESS },
+            { name: 'vaultId', type: ABIDataTypes.UINT256 },
         ],
         outputs: [
             { name: 'currentStatus', type: ABIDataTypes.UINT256 },
@@ -84,6 +88,7 @@ export const ETERNAL_SENTINEL_ABI: BitcoinInterfaceAbi = [
             { name: 'tier2Amount', type: ABIDataTypes.UINT256 },
             { name: 'tier1BlocksRemaining', type: ABIDataTypes.UINT64 },
             { name: 'tier2BlocksRemaining', type: ABIDataTypes.UINT64 },
+            { name: 'owner', type: ABIDataTypes.UINT256 },
         ],
     },
     {
@@ -91,10 +96,10 @@ export const ETERNAL_SENTINEL_ABI: BitcoinInterfaceAbi = [
         type: BitcoinAbiTypes.Function,
         constant: true,
         inputs: [
-            { name: 'owner', type: ABIDataTypes.ADDRESS },
+            { name: 'vaultId', type: ABIDataTypes.UINT256 },
         ],
         outputs: [
-            { name: 'beneficiary', type: ABIDataTypes.ADDRESS },
+            { name: 'beneficiary', type: ABIDataTypes.UINT256 },
         ],
     },
     {
@@ -102,10 +107,33 @@ export const ETERNAL_SENTINEL_ABI: BitcoinInterfaceAbi = [
         type: BitcoinAbiTypes.Function,
         constant: true,
         inputs: [
-            { name: 'owner', type: ABIDataTypes.ADDRESS },
+            { name: 'vaultId', type: ABIDataTypes.UINT256 },
         ],
         outputs: [
             { name: 'exists', type: ABIDataTypes.BOOL },
+        ],
+    },
+    {
+        name: '_getVaultCount',
+        type: BitcoinAbiTypes.Function,
+        constant: true,
+        inputs: [
+            { name: 'owner', type: ABIDataTypes.ADDRESS },
+        ],
+        outputs: [
+            { name: 'count', type: ABIDataTypes.UINT256 },
+        ],
+    },
+    {
+        name: '_getVaultIdByIndex',
+        type: BitcoinAbiTypes.Function,
+        constant: true,
+        inputs: [
+            { name: 'owner', type: ABIDataTypes.ADDRESS },
+            { name: 'index', type: ABIDataTypes.UINT256 },
+        ],
+        outputs: [
+            { name: 'vaultId', type: ABIDataTypes.UINT256 },
         ],
     },
     {
