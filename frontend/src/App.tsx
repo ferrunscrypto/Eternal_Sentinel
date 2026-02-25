@@ -127,9 +127,9 @@ export function App() {
                         <circle cx="32" cy="32" r="20" stroke="#555970" strokeWidth="1.5" />
                         <circle cx="32" cy="32" r="4" fill="#555970" />
                     </svg>
-                    <h2 className="empty-state__title">Connect to View Vaults</h2>
+                    <h2 className="empty-state__title">What happens to your Bitcoin when you can't reach it?</h2>
                     <p className="empty-state__desc">
-                        Connect your wallet to view and manage inheritance vaults.
+                        Eternal Sentinel is the last guardian of your Bitcoin — a trustless dead man's switch on OPNet. Stay active, keep control. Go silent, and your vault releases automatically to the people you chose. Your rules. Enforced by code, not custodians.
                     </p>
                     <button className="btn-connect" onClick={() => connectToWallet(SupportedWallets.OP_WALLET)} disabled={connecting}>
                         {connecting ? 'Connecting...' : 'Connect Wallet'}
