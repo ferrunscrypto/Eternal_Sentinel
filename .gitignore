@@ -1,0 +1,33 @@
+# Dependencies
+node_modules/
+*/node_modules/
+
+# Build outputs
+contract/build/
+contract/abis/
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Environment / secrets
+.env
+.env.local
+.env.*.local
+
+# Vite cache
+frontend/.vite/
+frontend/dist/
+
+# Lock files (keep package-lock.json, ignore yarn.lock if accidentally created)
+yarn.lock

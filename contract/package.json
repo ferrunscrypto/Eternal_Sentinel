@@ -1,0 +1,26 @@
+{
+    "name": "eternal-sentinel-contract",
+    "version": "1.0.0",
+    "description": "Eternal Sentinel - Dead Man's Switch with Progressive Inheritance on Bitcoin L1",
+    "scripts": {
+        "build": "asc src/index.ts --config asconfig.json --target debug",
+        "clean": "rm -rf build/*",
+        "test": "vitest run",
+        "test:watch": "vitest",
+        "postinstall": "npx patch-package"
+    },
+    "dependencies": {
+        "@btc-vision/as-bignum": "latest",
+        "@btc-vision/btc-runtime": "latest",
+        "@btc-vision/opnet-transform": "latest"
+    },
+    "devDependencies": {
+        "@testing-library/jest-dom": "^6.9.1",
+        "@testing-library/react": "^16.3.2",
+        "@testing-library/user-event": "^14.6.1",
+        "@vitest/coverage-v8": "^4.0.18",
+        "assemblyscript": "^0.27.32",
+        "jsdom": "^28.1.0",
+        "vitest": "^4.0.18"
+    }
+}
