@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useWalletConnect, SupportedWallets } from '@btc-vision/walletconnect';
 import { Header } from './components/Header';
 import { FlatlineRing } from './components/FlatlineRing';
@@ -10,6 +10,17 @@ import { fetchVaultIdsForOwner } from './utils/vaultFetch';
 
 export function App() {
     const { network, walletAddress, address: walletAddressObj, connectToWallet, connecting } = useWalletConnect();
+
+    // Reload the page when the user switches to a different wallet.
+    // This is the simplest way to clear all cached state (contract cache,
+    // selected vault, UTXO manager, etc.) without manually tracking every piece.
+    const prevWalletRef = useRef(walletAddress);
+    useEffect(() => {
+        if (prevWalletRef.current && walletAddress && prevWalletRef.current !== walletAddress) {
+            window.location.reload();
+        }
+        prevWalletRef.current = walletAddress;
+    }, [walletAddress]);
 
     // ── Vault list state ────────────────────────────────────────────────────────
     const [vaultIds, setVaultIds] = useState<bigint[]>([]);
