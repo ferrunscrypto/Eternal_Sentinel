@@ -135,14 +135,12 @@ export function useSentinel(vaultId?: bigint | null): UseSentinelReturn {
                     return false;
                 }
 
-                const params: TransactionParameters = {
-                    signer: null,
-                    mldsaSigner: null,
-                    refundTo: walletAddress,
-                    maximumAllowedSatToSpend: 100_000n,
-                    network,
-                };
+                // signer/mldsaSigner must be omitted — OP_WALLET now rejects them even as null.
+                // Cast to bypass the outdated rc.11 type requirement.
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                const params = { refundTo: walletAddress, maximumAllowedSatToSpend: 100_000n, network } as unknown as TransactionParameters;
 
+                providerService.getProvider(network).utxoManager.clean();
                 await simulation.sendTransaction(params);
                 await refreshStatus();
                 return true;
@@ -196,15 +194,10 @@ export function useSentinel(vaultId?: bigint | null): UseSentinelReturn {
 
                 const newVaultId: bigint = simulation.properties.vaultId;
 
-                const params: TransactionParameters = {
-                    signer: null,
-                    mldsaSigner: null,
-                    refundTo: walletAddress,
-                    maximumAllowedSatToSpend: 100_000n,
-                    network,
-                };
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                const params = { refundTo: walletAddress, maximumAllowedSatToSpend: 100_000n, network } as unknown as TransactionParameters;
 
-                // Clear pending UTXO cache before sending — same reason as sendTx.
+                // Clear pending UTXO cache before sending.
                 providerService.getProvider(network).utxoManager.clean();
 
                 await simulation.sendTransaction(params);
