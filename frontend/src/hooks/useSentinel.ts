@@ -137,12 +137,14 @@ export function useSentinel(vaultId?: bigint | null): UseSentinelReturn {
                     return false;
                 }
 
-                // signer/mldsaSigner must be omitted — OP_WALLET now rejects them even as null.
-                // Cast to bypass the outdated rc.11 type requirement.
-                // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                const params = { refundTo: walletAddress, maximumAllowedSatToSpend: 100_000n, network } as unknown as TransactionParameters;
+                const params: TransactionParameters = {
+                    signer: null,
+                    mldsaSigner: null,
+                    refundTo: walletAddress,
+                    maximumAllowedSatToSpend: 100_000n,
+                    network,
+                };
 
-                providerService.getProvider(network).utxoManager.clean();
                 await simulation.sendTransaction(params);
                 await refreshStatus();
                 return true;
@@ -196,10 +198,15 @@ export function useSentinel(vaultId?: bigint | null): UseSentinelReturn {
 
                 const newVaultId: bigint = simulation.properties.vaultId;
 
-                // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                const params = { refundTo: walletAddress, maximumAllowedSatToSpend: 100_000n, network } as unknown as TransactionParameters;
+                const params: TransactionParameters = {
+                    signer: null,
+                    mldsaSigner: null,
+                    refundTo: walletAddress,
+                    maximumAllowedSatToSpend: 100_000n,
+                    network,
+                };
 
-                // Clear pending UTXO cache before sending.
+                // Clear pending UTXO cache before sending — same reason as sendTx.
                 providerService.getProvider(network).utxoManager.clean();
 
                 await simulation.sendTransaction(params);
@@ -240,8 +247,13 @@ export function useSentinel(vaultId?: bigint | null): UseSentinelReturn {
                     // Silently skip vaults that aren't active (simulation reverts)
                     if (simulation.revert) continue;
 
-                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                    const params = { refundTo: walletAddress, maximumAllowedSatToSpend: 100_000n, network } as unknown as TransactionParameters;
+                    const params: TransactionParameters = {
+                        signer: null,
+                        mldsaSigner: null,
+                        refundTo: walletAddress,
+                        maximumAllowedSatToSpend: 100_000n,
+                        network,
+                    };
 
                     providerService.getProvider(network).utxoManager.clean();
                     await simulation.sendTransaction(params);

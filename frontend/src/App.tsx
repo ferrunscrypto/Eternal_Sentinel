@@ -7,7 +7,6 @@ import { TierStepper } from './components/TierStepper';
 import { VaultListPage } from './components/VaultListPage';
 import { useSentinel } from './hooks/useSentinel';
 import { fetchVaultIdsForOwner } from './utils/vaultFetch';
-import { contractService } from './services/ContractService';
 
 export function App() {
     const { network, walletAddress, address: walletAddressObj, connectToWallet, connecting } = useWalletConnect();
@@ -50,21 +49,6 @@ export function App() {
         checkInAll,
         deposit,
     } = useSentinel(selectedVaultId);
-
-    // Reset all vault state when wallet changes
-    useEffect(() => {
-        setSelectedVaultId(null);
-        setVaultIds([]);
-        setVaultIdsLoaded(false);
-        setVaultLoadError(null);
-        setVaultTxSubmitted(false);
-        setPendingVaultId(null);
-        setShowCreateForm(false);
-        setBeneficiaryInput('');
-        setCheckInSubmitted(false);
-        setCheckInAllSubmitted(false);
-        contractService.clearCache();
-    }, [walletAddress]);
 
     // Fetch vault IDs when wallet connects.
     // Pass the wallet's own Address object directly — it is already the correct
