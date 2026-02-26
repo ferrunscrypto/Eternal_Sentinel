@@ -143,11 +143,6 @@ export function useSentinel(vaultId?: bigint | null): UseSentinelReturn {
                     network,
                 };
 
-                // Clear pending UTXO cache so each tx uses fresh on-chain UTXOs.
-                // Without this, a second transaction reuses the pending change UTXO
-                // from the first tx which the node rejects with "Could not decode transaction".
-                providerService.getProvider(network).utxoManager.clean();
-
                 await simulation.sendTransaction(params);
                 await refreshStatus();
                 return true;
