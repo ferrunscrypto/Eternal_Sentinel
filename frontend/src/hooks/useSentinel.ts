@@ -1,11 +1,11 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useWalletConnect } from '@btc-vision/walletconnect';
 import { TransactionParameters } from 'opnet';
 import { contractService } from '../services/ContractService';
+import { providerService } from '../services/ProviderService';
 import { SentinelStatus } from '../types/sentinel';
 import { IEternalSentinelContract } from '../types/contracts';
 import { getNetworkName } from '../config/networks';
-import { resolveAddress } from '../utils/vaultFetch';
 
 interface UseSentinelReturn {
     readonly status: SentinelStatus | null;
@@ -31,44 +31,15 @@ interface UseSentinelReturn {
  * Write operations use the connected wallet as tx.sender.
  */
 export function useSentinel(vaultId?: bigint | null): UseSentinelReturn {
-    const { network, walletAddress } = useWalletConnect();
+    const { network, walletAddress, address: walletAddressObj } = useWalletConnect();
     const [status, setStatus] = useState<SentinelStatus | null>(null);
     const [loading, setLoading] = useState<boolean>(false);
     const [error, setError] = useState<string | null>(null);
     const [isOwner, setIsOwner] = useState<boolean>(false);
 
-    // Cache the resolved Address for the CONNECTED WALLET (used as `from` in write simulations)
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const resolvedSenderRef = useRef<any | null>(null);
-    const resolvedSenderForRef = useRef<string | null>(null);
-
-    // Cache the wallet address as u256 for ownership comparison
-    const walletU256Ref = useRef<bigint | null>(null);
-    const walletU256ForRef = useRef<string | null>(null);
-
     const connected = !!(walletAddress && network);
     const networkName = network ? getNetworkName(network) : 'Not connected';
     const contractDeployed = !!(network && contractService.getSentinelContract(network) !== null);
-
-    /** Get (and cache) the resolved Address for the connected wallet (tx.sender for writes) */
-    const getSenderAddress = useCallback(async () => {
-        if (!walletAddress || !network) return null;
-        if (resolvedSenderRef.current && resolvedSenderForRef.current === walletAddress) {
-            return resolvedSenderRef.current;
-        }
-        try {
-            const addr = await resolveAddress(walletAddress, network);
-            resolvedSenderRef.current = addr;
-            resolvedSenderForRef.current = walletAddress;
-            // Also cache the u256 representation while we have the address
-            const hex = addr.toString().replace(/^0x/, '');
-            walletU256Ref.current = BigInt('0x' + hex);
-            walletU256ForRef.current = walletAddress;
-            return addr;
-        } catch {
-            return null;
-        }
-    }, [walletAddress, network]);
 
     const refreshStatus = useCallback(async () => {
         if (!network || !connected || vaultId == null) return;
@@ -113,19 +84,9 @@ export function useSentinel(vaultId?: bigint | null): UseSentinelReturn {
                 owner: props.owner,
             });
 
-            // isOwner if the connected wallet's address matches the vault owner
-            // Resolve wallet u256 if not cached yet
-            if (walletAddress && network && walletU256Ref.current === null) {
-                try {
-                    const addr = await resolveAddress(walletAddress, network);
-                    const hex = addr.toString().replace(/^0x/, '');
-                    walletU256Ref.current = BigInt('0x' + hex);
-                    walletU256ForRef.current = walletAddress;
-                } catch {
-                    // leave as null
-                }
-            }
-            const myU256 = walletU256Ref.current;
+            // Use the wallet's Address directly — it's the 32-byte MLDSA hash
+            // that the OPNet runtime uses as Blockchain.tx.sender.
+            const myU256 = walletAddressObj?.toBigInt() ?? null;
             setIsOwner(myU256 !== null && myU256 === props.owner);
         } catch (err: unknown) {
             const message = err instanceof Error ? err.message : 'Failed to fetch status';
@@ -134,7 +95,7 @@ export function useSentinel(vaultId?: bigint | null): UseSentinelReturn {
         } finally {
             setLoading(false);
         }
-    }, [network, vaultId, walletAddress, connected]);
+    }, [network, vaultId, walletAddress, connected, walletAddressObj]);
 
     useEffect(() => {
         void refreshStatus();
@@ -160,9 +121,9 @@ export function useSentinel(vaultId?: bigint | null): UseSentinelReturn {
             setError(null);
 
             try {
-                // Resolve sender address so simulation uses correct tx.sender
-                const senderAddr = await getSenderAddress();
-                const contract = contractService.getSentinelContract(network, senderAddr ?? undefined);
+                // Use the wallet's Address directly as the simulation sender.
+                // walletAddressObj is already the correct 32-byte MLDSA Address.
+                const contract = contractService.getSentinelContract(network, walletAddressObj ?? undefined);
                 if (!contract) {
                     setError('Contract not available');
                     return false;
@@ -179,7 +140,6 @@ export function useSentinel(vaultId?: bigint | null): UseSentinelReturn {
                     mldsaSigner: null,
                     refundTo: walletAddress,
                     maximumAllowedSatToSpend: 100_000n,
-                    feeRate: 10,
                     network,
                 };
 
@@ -194,7 +154,7 @@ export function useSentinel(vaultId?: bigint | null): UseSentinelReturn {
                 setLoading(false);
             }
         },
-        [network, walletAddress, refreshStatus, getSenderAddress],
+        [network, walletAddress, walletAddressObj, refreshStatus],
     );
 
     const createVault = useCallback(
@@ -208,9 +168,20 @@ export function useSentinel(vaultId?: bigint | null): UseSentinelReturn {
             setError(null);
 
             try {
-                const beneficiaryAddr = await resolveAddress(beneficiary, network);
-                const senderAddr = await getSenderAddress();
-                const contract = contractService.getSentinelContract(network, senderAddr ?? undefined);
+                // Use provider.getPublicKeyInfo() which always returns a 32-byte MLDSA
+                // Address — never the 33-byte ECDSA tweakedPubkey that writeAddress rejects.
+                const provider = providerService.getProvider(network);
+                const beneficiaryAddr = await provider.getPublicKeyInfo(beneficiary.trim(), false);
+                if (!beneficiaryAddr) {
+                    setError(
+                        'Could not find the public key for this address. ' +
+                        'Make sure it has been used on-chain, or paste the 0x... MLDSA hash directly.',
+                    );
+                    return null;
+                }
+
+                // walletAddressObj is the correct simulation sender.
+                const contract = contractService.getSentinelContract(network, walletAddressObj ?? undefined);
                 if (!contract) {
                     setError('Contract not available');
                     return null;
@@ -230,7 +201,6 @@ export function useSentinel(vaultId?: bigint | null): UseSentinelReturn {
                     mldsaSigner: null,
                     refundTo: walletAddress,
                     maximumAllowedSatToSpend: 100_000n,
-                    feeRate: 10,
                     network,
                 };
 
@@ -244,7 +214,7 @@ export function useSentinel(vaultId?: bigint | null): UseSentinelReturn {
                 setLoading(false);
             }
         },
-        [network, walletAddress, getSenderAddress],
+        [network, walletAddress, walletAddressObj],
     );
 
     const checkIn = useCallback(async (): Promise<boolean> => {
@@ -267,7 +237,12 @@ export function useSentinel(vaultId?: bigint | null): UseSentinelReturn {
             if (!network || vaultId == null) return false;
 
             try {
-                const addr = await resolveAddress(address, network);
+                const provider = providerService.getProvider(network);
+                const addr = await provider.getPublicKeyInfo(address.trim(), false);
+                if (!addr) {
+                    setError('Could not resolve beneficiary address. Use the 0x... MLDSA hash directly if the address is not on-chain.');
+                    return false;
+                }
                 return sendTx((contract) => contract._setBeneficiary(vaultId, addr as never) as never);
             } catch (err: unknown) {
                 const message = err instanceof Error ? err.message : 'Failed to resolve address';

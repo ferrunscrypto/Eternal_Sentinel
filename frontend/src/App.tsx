@@ -9,11 +9,12 @@ import { useSentinel } from './hooks/useSentinel';
 import { fetchVaultIdsForOwner } from './utils/vaultFetch';
 
 export function App() {
-    const { network, walletAddress, connectToWallet, connecting } = useWalletConnect();
+    const { network, walletAddress, address: walletAddressObj, connectToWallet, connecting } = useWalletConnect();
 
     // ── Vault list state ────────────────────────────────────────────────────────
     const [vaultIds, setVaultIds] = useState<bigint[]>([]);
     const [vaultIdsLoaded, setVaultIdsLoaded] = useState(false);
+    const [vaultLoadError, setVaultLoadError] = useState<string | null>(null);
     const [selectedVaultId, setSelectedVaultId] = useState<bigint | null>(null);
 
     // ── Vault creation state ────────────────────────────────────────────────────
@@ -46,29 +47,33 @@ export function App() {
         deposit,
     } = useSentinel(selectedVaultId);
 
-    // Fetch vault IDs when wallet connects
+    // Fetch vault IDs when wallet connects.
+    // Pass the wallet's own Address object directly — it is already the correct
+    // 32-byte MLDSA address that the contract uses as the vault owner key.
     useEffect(() => {
-        if (!walletAddress || !network) {
+        if (!walletAddress || !network || !walletAddressObj) {
             setVaultIds([]);
             setVaultIdsLoaded(false);
             return;
         }
         setVaultIdsLoaded(false);
-        void fetchVaultIdsForOwner(walletAddress, network).then(ids => {
+        setVaultLoadError(null);
+        void fetchVaultIdsForOwner(walletAddressObj, network).then(ids => {
             setVaultIds(ids);
             setVaultIdsLoaded(true);
-        }).catch(() => {
+        }).catch((err: unknown) => {
             setVaultIds([]);
             setVaultIdsLoaded(true);
+            setVaultLoadError(err instanceof Error ? err.message : 'Failed to load vaults');
         });
-    }, [walletAddress, network]);
+    }, [walletAddress, walletAddressObj, network]);
 
     // Poll for vault confirmation after tx is submitted
     useEffect(() => {
-        if (!vaultTxSubmitted || !walletAddress || !network || pendingVaultId == null) return;
+        if (!vaultTxSubmitted || !walletAddressObj || !network || pendingVaultId == null) return;
         let cancelled = false;
         const poll = setInterval(() => {
-            void fetchVaultIdsForOwner(walletAddress, network).then(ids => {
+            void fetchVaultIdsForOwner(walletAddressObj, network).then(ids => {
                 if (cancelled) return;
                 if (ids.includes(pendingVaultId)) {
                     clearInterval(poll);
@@ -80,7 +85,7 @@ export function App() {
             });
         }, 8_000);
         return () => { cancelled = true; clearInterval(poll); };
-    }, [vaultTxSubmitted, walletAddress, network, pendingVaultId]);
+    }, [vaultTxSubmitted, walletAddressObj, network, pendingVaultId]);
 
     // ── Vault list handlers ─────────────────────────────────────────────────────
     const handleSelectVault = (id: bigint) => {
@@ -95,8 +100,8 @@ export function App() {
         setVaultTxSubmitted(false);
         setCreatingVault(false);
         // Refresh vault IDs
-        if (walletAddress && network) {
-            void fetchVaultIdsForOwner(walletAddress, network).then(ids => setVaultIds(ids));
+        if (walletAddressObj && network) {
+            void fetchVaultIdsForOwner(walletAddressObj, network).then(ids => setVaultIds(ids));
         }
     };
 
@@ -190,11 +195,27 @@ export function App() {
                         </svg>
                         <h2 className="empty-state__title">Create Your Vault</h2>
                         <p className="empty-state__desc">Enter the beneficiary address who will receive the funds.</p>
+                        {vaultLoadError && (
+                            <div className="alert alert--error" style={{ marginBottom: '0.75rem', maxWidth: 420 }}>
+                                <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+                                    <path d="M8 1a7 7 0 110 14A7 7 0 018 1zm0 10.5a.75.75 0 100-1.5.75.75 0 000 1.5zM8 4a.75.75 0 00-.75.75v3.5a.75.75 0 001.5 0v-3.5A.75.75 0 008 4z" />
+                                </svg>
+                                Could not load existing vaults: {vaultLoadError}
+                            </div>
+                        )}
+                        {error && (
+                            <div className="alert alert--error" style={{ marginBottom: '0.75rem', maxWidth: 420 }}>
+                                <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+                                    <path d="M8 1a7 7 0 110 14A7 7 0 018 1zm0 10.5a.75.75 0 100-1.5.75.75 0 000 1.5zM8 4a.75.75 0 00-.75.75v3.5a.75.75 0 001.5 0v-3.5A.75.75 0 008 4z" />
+                                </svg>
+                                {error}
+                            </div>
+                        )}
                         <div className="create-vault-form">
                             <input
                                 className="create-vault-form__input"
                                 type="text"
-                                placeholder="Beneficiary address (opt1p…)"
+                                placeholder="Beneficiary address (opt1… or 0x… key)"
                                 value={beneficiaryInput}
                                 onChange={e => setBeneficiaryInput(e.target.value)}
                                 spellCheck={false}
@@ -226,11 +247,19 @@ export function App() {
                         </svg>
                         <h2 className="empty-state__title">Create Your Vault</h2>
                         <p className="empty-state__desc">Enter the beneficiary address who will receive the funds.</p>
+                        {error && (
+                            <div className="alert alert--error" style={{ marginBottom: '0.75rem', maxWidth: 420 }}>
+                                <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+                                    <path d="M8 1a7 7 0 110 14A7 7 0 018 1zm0 10.5a.75.75 0 100-1.5.75.75 0 000 1.5zM8 4a.75.75 0 00-.75.75v3.5a.75.75 0 001.5 0v-3.5A.75.75 0 008 4z" />
+                                </svg>
+                                {error}
+                            </div>
+                        )}
                         <div className="create-vault-form">
                             <input
                                 className="create-vault-form__input"
                                 type="text"
-                                placeholder="Beneficiary address (opt1p…)"
+                                placeholder="Beneficiary address (opt1… or 0x… key)"
                                 value={beneficiaryInput}
                                 onChange={e => setBeneficiaryInput(e.target.value)}
                                 spellCheck={false}

@@ -4,18 +4,17 @@ import { contractService } from '../services/ContractService';
 import { providerService } from '../services/ProviderService';
 import type { SentinelStatus } from '../types/sentinel';
 
-export async function resolveAddress(bech32: string, network: Network): Promise<Address> {
+/**
+ * Resolve a bech32 or hex address to a 32-byte MLDSA Address object.
+ *
+ * Uses provider.getPublicKeyInfo() which always returns the 32-byte MLDSA hash —
+ * never falls back to the 33-byte ECDSA tweakedPubkey (which would fail writeAddress).
+ */
+export async function resolveAddress(bech32OrHex: string, network: Network): Promise<Address> {
     const provider = providerService.getProvider(network);
-    const result = await provider.getPublicKeysInfoRaw(bech32);
-    const keys = Object.keys(result);
-    const firstKey = keys[0];
-    if (!firstKey) throw new Error(`Empty response for address: ${bech32}`);
-    const info = result[bech32] ?? result[firstKey];
-    if (!info || 'error' in info) throw new Error(`Could not resolve address: ${bech32}`);
-    const primaryKey = info.mldsaHashedPublicKey ?? info.tweakedPubkey;
-    if (!primaryKey) throw new Error(`No public key data found for ${bech32}`);
-    const legacyKey = info.originalPubKey ?? info.tweakedPubkey;
-    return Address.fromString(primaryKey, legacyKey);
+    const addr = await provider.getPublicKeyInfo(bech32OrHex, false);
+    if (!addr) throw new Error(`Could not resolve public key for: ${bech32OrHex}`);
+    return addr;
 }
 
 export interface VaultSummary {
@@ -25,25 +24,28 @@ export interface VaultSummary {
 }
 
 /**
- * Fetch all vault IDs owned by a given bech32 address.
+ * Fetch all vault IDs owned by the given Address.
+ *
+ * Accepts a pre-resolved Address (from the wallet context) to avoid any
+ * network lookups for the owner — use the wallet's own address directly.
  */
 export async function fetchVaultIdsForOwner(
-    ownerBech32: string,
+    ownerAddress: Address,
     network: Network,
 ): Promise<bigint[]> {
     const contract = contractService.getSentinelContract(network);
     if (!contract) return [];
 
-    const addr = await resolveAddress(ownerBech32, network);
-
-    const countResult = await contract._getVaultCount(addr as never);
+    // ownerAddress is already a 32-byte MLDSA Address from the wallet context.
+    // The SDK's encodeInput(ADDRESS) requires an Address object with an `equals` method.
+    const countResult = await contract._getVaultCount(ownerAddress as never);
     const count: bigint = countResult.properties.count;
 
     if (count === 0n) return [];
 
     const ids: bigint[] = [];
     for (let i = 0n; i < count; i++) {
-        const idResult = await contract._getVaultIdByIndex(addr as never, i);
+        const idResult = await contract._getVaultIdByIndex(ownerAddress as never, i);
         ids.push(idResult.properties.vaultId);
     }
 
