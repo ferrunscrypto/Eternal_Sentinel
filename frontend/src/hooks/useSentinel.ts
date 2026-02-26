@@ -20,6 +20,8 @@ interface UseSentinelReturn {
     /** Create a new vault — returns the new vault ID or null on failure */
     readonly createVault: (beneficiary: string) => Promise<bigint | null>;
     readonly checkIn: () => Promise<boolean>;
+    /** Check in all provided vaults sequentially; silently skips non-active ones */
+    readonly checkInAll: (vaultIds: bigint[]) => Promise<boolean>;
     readonly triggerTier1: () => Promise<boolean>;
     readonly triggerTier2: () => Promise<boolean>;
     readonly setBeneficiary: (address: string) => Promise<boolean>;
@@ -218,6 +220,45 @@ export function useSentinel(vaultId?: bigint | null): UseSentinelReturn {
         return sendTx((contract) => contract._checkIn(vaultId) as never);
     }, [vaultId, sendTx]);
 
+    const checkInAll = useCallback(
+        async (vaultIds: bigint[]): Promise<boolean> => {
+            if (!network || !walletAddress) {
+                setError('Wallet not connected');
+                return false;
+            }
+
+            setLoading(true);
+            setError(null);
+            let submitted = 0;
+
+            try {
+                for (const id of vaultIds) {
+                    const contract = contractService.getSentinelContract(network, walletAddressObj ?? undefined);
+                    if (!contract) continue;
+
+                    const simulation = await contract._checkIn(id);
+                    // Silently skip vaults that aren't active (simulation reverts)
+                    if (simulation.revert) continue;
+
+                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                    const params = { refundTo: walletAddress, maximumAllowedSatToSpend: 100_000n, network } as unknown as TransactionParameters;
+
+                    providerService.getProvider(network).utxoManager.clean();
+                    await simulation.sendTransaction(params);
+                    submitted++;
+                }
+            } catch (err: unknown) {
+                const message = err instanceof Error ? err.message : 'Bulk check-in failed';
+                setError(message);
+            } finally {
+                setLoading(false);
+            }
+
+            return submitted > 0;
+        },
+        [network, walletAddress, walletAddressObj],
+    );
+
     const triggerTier1 = useCallback(async (): Promise<boolean> => {
         if (vaultId == null) return false;
         return sendTx((contract) => contract._triggerTier1(vaultId) as never);
@@ -269,6 +310,7 @@ export function useSentinel(vaultId?: bigint | null): UseSentinelReturn {
         refreshStatus,
         createVault,
         checkIn,
+        checkInAll,
         triggerTier1,
         triggerTier2,
         setBeneficiary,

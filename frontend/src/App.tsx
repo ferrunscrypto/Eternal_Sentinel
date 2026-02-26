@@ -32,6 +32,8 @@ export function App() {
     // ── Check-in state ──────────────────────────────────────────────────────────
     const [checkInSubmitting, setCheckInSubmitting] = useState(false);
     const [checkInSubmitted, setCheckInSubmitted] = useState(false);
+    const [checkInAllSubmitting, setCheckInAllSubmitting] = useState(false);
+    const [checkInAllSubmitted, setCheckInAllSubmitted] = useState(false);
 
     // ── useSentinel — scoped to selected vault ID ───────────────────────────────
     const {
@@ -45,6 +47,7 @@ export function App() {
         triggerTier2,
         createVault,
         checkIn,
+        checkInAll,
         deposit,
     } = useSentinel(selectedVaultId);
 
@@ -59,6 +62,7 @@ export function App() {
         setShowCreateForm(false);
         setBeneficiaryInput('');
         setCheckInSubmitted(false);
+        setCheckInAllSubmitted(false);
         contractService.clearCache();
     }, [walletAddress]);
 
@@ -297,6 +301,16 @@ export function App() {
             );
         }
 
+        const handleCheckInAll = vaultIds.length > 1 ? () => {
+            setCheckInAllSubmitting(true);
+            setCheckInAllSubmitted(false);
+            void checkInAll(vaultIds).then(() => {
+                setCheckInAllSubmitting(false);
+                setCheckInAllSubmitted(true);
+                setTimeout(() => setCheckInAllSubmitted(false), 20_000);
+            }).catch(() => setCheckInAllSubmitting(false));
+        } : undefined;
+
         return (
             <>
                 <Header />
@@ -306,6 +320,9 @@ export function App() {
                     vaultIds={vaultIds}
                     onSelectVault={handleSelectVault}
                     onCreateVault={() => setShowCreateForm(true)}
+                    onCheckInAll={handleCheckInAll}
+                    checkInAllSubmitting={checkInAllSubmitting}
+                    checkInAllSubmitted={checkInAllSubmitted}
                 />
             </>
         );
@@ -399,8 +416,8 @@ export function App() {
                     </div>
                 </div>
 
-                {/* Heartbeat check-in — owner only, active status only */}
-                {isOwner && s.currentStatus === 1n && (
+                {/* Heartbeat check-in — owner only, active status only, single-vault mode */}
+                {isOwner && s.currentStatus === 1n && vaultIds.length <= 1 && (
                     <div className="checkin-section">
                         <div className="checkin-section__left">
                             <div className="checkin-section__title">

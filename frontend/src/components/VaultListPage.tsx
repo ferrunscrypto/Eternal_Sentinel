@@ -86,6 +86,9 @@ interface VaultListPageProps {
     vaultIds: bigint[];
     onSelectVault: (vaultId: bigint) => void;
     onCreateVault: () => void;
+    onCheckInAll?: () => void;
+    checkInAllSubmitting?: boolean;
+    checkInAllSubmitted?: boolean;
 }
 
 export function VaultListPage({
@@ -94,6 +97,9 @@ export function VaultListPage({
     vaultIds,
     onSelectVault,
     onCreateVault,
+    onCheckInAll,
+    checkInAllSubmitting,
+    checkInAllSubmitted,
 }: VaultListPageProps) {
     return (
         <div className="vault-list-page">
@@ -104,7 +110,29 @@ export function VaultListPage({
                         Select a vault to manage, or create a new one.
                     </p>
                 </div>
-                <button className="btn-new-vault" onClick={onCreateVault}>+ New Vault</button>
+                <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
+                    {onCheckInAll && (
+                        <button
+                            className="btn-checkin"
+                            disabled={checkInAllSubmitting || checkInAllSubmitted}
+                            onClick={onCheckInAll}
+                        >
+                            {checkInAllSubmitting ? (
+                                <><span className="btn-trigger__spinner" />Sending…</>
+                            ) : checkInAllSubmitted ? (
+                                <>✓ Submitted</>
+                            ) : (
+                                <>
+                                    <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor">
+                                        <path d="M1.5 8a6.5 6.5 0 1113 0 6.5 6.5 0 01-13 0zM8 0a8 8 0 100 16A8 8 0 008 0zm.5 4.75a.75.75 0 00-1.5 0v3.5a.75.75 0 00.471.696l2.5 1a.75.75 0 00.557-1.392L8.5 7.742V4.75z" />
+                                    </svg>
+                                    Reset All Countdowns
+                                </>
+                            )}
+                        </button>
+                    )}
+                    <button className="btn-new-vault" onClick={onCreateVault}>+ New Vault</button>
+                </div>
             </div>
 
             {vaultIds.length === 0 ? (
